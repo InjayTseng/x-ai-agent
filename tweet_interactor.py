@@ -17,17 +17,21 @@ class TweetInteractor:
         """Generate a reply using OpenAI based on tweet content and context"""
         try:
             # Create a prompt that includes tweet context
-            prompt = f"""Tweet: {tweet_data['content']}
-Author: {tweet_data['author']}
-Context: This tweet is about {tweet_data['summary']}
+            prompt = f"""Tweet to reply to:
+{tweet_data['content']}
 
-Please generate a thoughtful, engaging reply to this tweet. The reply should be:
-1. Relevant to the tweet's content
-2. Professional and friendly
-3. No more than 100 characters
-4. Written in the same language as the original tweet
-5. No hastags
-"""
+Generate a casual reply that:
+1. Stays relevant to the tweet
+2. Uses all lowercase (like casual texting)
+3. Keeps it under 100 chars
+4. Same language as original tweet
+5. NO hashtags, NO emojis
+6. Sounds like a friend chatting (not a formal reply)
+
+Example good reply: 'never thought about it that way'
+Example bad reply: 'Thank you for sharing! This is a very interesting perspective. Looking forward to more insights!'
+
+Make it sound natural and conversational, not like an assistant."""
 
             response = self.openai_client.chat.completions.create(
                 model="gpt-4",

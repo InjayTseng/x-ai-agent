@@ -6,6 +6,7 @@ from playwright_setup import TwitterBrowser
 from database import TwitterDatabase
 from tweet_analyzer import TweetAnalyzer
 from tweet_interactor import TweetInteractor
+from tweet_summarizer import TweetSummarizer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,7 @@ async def main():
     browser = TwitterBrowser()
     analyzer = TweetAnalyzer(db, os.getenv('OPENAI_API_KEY'))
     interactor = TweetInteractor(db, os.getenv('OPENAI_API_KEY'))
+    summarizer = TweetSummarizer(db, os.getenv('OPENAI_API_KEY'))
     
     try:
         # Start browser
@@ -36,15 +38,24 @@ async def main():
             logger.error("Failed to login to Twitter")
             return
             
-        # Fetch and analyze tweets
-        await analyzer.fetch_and_learn_tweets(browser.page, max_tweets=5)
+        # Get the browser page
+        page = browser.page
+        
+        # Analyze recent tweets
+        await analyzer.fetch_and_learn_tweets(page)
         
         # Reply to recent tweets
-        await interactor.reply_to_recent_tweets(browser.page, max_tweets=3)
+        await interactor.reply_to_recent_tweets(page)
+        
+        # Post daily summary (if SUMMARY_INTERVAL hours have passed since last summary)
+        summary_interval = int(os.getenv('SUMMARY_INTERVAL', 24))
+        await summarizer.post_summary(page, hours=summary_interval)
         
     except Exception as e:
-        logger.error(f"An error occurred: {str(e)}")
+        logger.error(f"Error in main: {e}")
+        
     finally:
+        # Close browser
         await browser.close()
 
 if __name__ == "__main__":
