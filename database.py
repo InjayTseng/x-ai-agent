@@ -2,6 +2,9 @@ import sqlite3
 from datetime import datetime
 from typing import List, Dict, Optional
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TwitterDatabase:
     def __init__(self, db_path: str = "twitter_agent.db"):
@@ -143,17 +146,27 @@ class TwitterDatabase:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
     
     def get_tweet_by_id(self, tweet_id: str) -> Optional[Dict]:
-        """Retrieve a specific tweet by its ID"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT tweet_id, content, author, timestamp, summary
-                FROM tweets
-                WHERE tweet_id = ?
-            ''', (tweet_id,))
-            
-            row = cursor.fetchone()
-            if row:
-                columns = ['tweet_id', 'content', 'author', 'timestamp', 'summary']
-                return dict(zip(columns, row))
+        """Get a tweet by its ID"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM tweets WHERE tweet_id = ?', (tweet_id,))
+                tweet = cursor.fetchone()
+                
+                if not tweet:
+                    return None
+                    
+                # Convert row to dictionary
+                columns = [description[0] for description in cursor.description]
+                tweet_dict = dict(zip(columns, tweet))
+                
+                # Parse JSON fields
+                for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding']:
+                    if tweet_dict.get(field):
+                        tweet_dict[field] = json.loads(tweet_dict[field])
+                        
+                return tweet_dict
+                
+        except Exception as e:
+            logger.error(f"Error getting tweet by ID: {e}")
             return None
