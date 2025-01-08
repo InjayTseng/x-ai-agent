@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from playwright_setup import TwitterBrowser
 from database import TwitterDatabase
 from tweet_analyzer import TweetAnalyzer
+from tweet_interactor import TweetInteractor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +19,7 @@ async def main():
     db = TwitterDatabase()
     browser = TwitterBrowser()
     analyzer = TweetAnalyzer(db, os.getenv('OPENAI_API_KEY'))
+    interactor = TweetInteractor(db, os.getenv('OPENAI_API_KEY'))
     
     try:
         # Start browser
@@ -36,6 +38,9 @@ async def main():
             
         # Fetch and analyze tweets
         await analyzer.fetch_and_learn_tweets(browser.page, max_tweets=5)
+        
+        # Reply to recent tweets
+        await interactor.reply_to_recent_tweets(browser.page, max_tweets=3)
         
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}")

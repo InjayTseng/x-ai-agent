@@ -108,7 +108,7 @@ class TwitterDatabase:
                 ))
                 return True
         except Exception as e:
-            print(f"Error saving reply: {e}")
+            logger.error(f"Error saving reply: {e}")
             return False
     
     def save_post(self, post_data: Dict) -> bool:
@@ -170,3 +170,53 @@ class TwitterDatabase:
         except Exception as e:
             logger.error(f"Error getting tweet by ID: {e}")
             return None
+    
+    def get_recent_unreplied_tweets(self, limit: int = 5, hours: int = 24) -> List[Dict]:
+        """Get recent tweets that haven't been replied to"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get tweets from last 24 hours that don't have replies
+                cursor.execute('''
+                    SELECT t.* FROM tweets t
+                    LEFT JOIN replies r ON t.tweet_id = r.original_tweet_id
+                    WHERE r.id IS NULL
+                    AND t.timestamp > datetime('now', ?)
+                    ORDER BY t.timestamp DESC
+                    LIMIT ?
+                ''', (f'-{hours} hours', limit))
+                
+                columns = [description[0] for description in cursor.description]
+                tweets = []
+                
+                for row in cursor.fetchall():
+                    tweet_dict = dict(zip(columns, row))
+                    # Parse JSON fields
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding']:
+                        if tweet_dict.get(field):
+                            tweet_dict[field] = json.loads(tweet_dict[field])
+                    tweets.append(tweet_dict)
+                
+                return tweets
+                
+        except Exception as e:
+            logger.error(f"Error getting unreplied tweets: {e}")
+            return []
+            
+    def has_reply(self, tweet_id: str) -> bool:
+        """Check if a tweet has been replied to"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT COUNT(*) FROM replies
+                    WHERE original_tweet_id = ?
+                ''', (tweet_id,))
+                
+                count = cursor.fetchone()[0]
+                return count > 0
+                
+        except Exception as e:
+            logger.error(f"Error checking reply status: {e}")
+            return False
