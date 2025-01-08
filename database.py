@@ -171,19 +171,48 @@ class TwitterDatabase:
             logger.error(f"Error getting tweet by ID: {e}")
             return None
     
-    def get_recent_unreplied_tweets(self, limit: int = 5, hours: int = 24) -> List[Dict]:
-        """Get recent tweets that haven't been replied to"""
+    def get_recent_unreplied_tweets(self, limit: int = 3, hours: int = 24) -> List[Dict]:
+        """Get recent tweets that haven't been replied to, prioritizing based on engagement potential"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
                 # Get tweets from last 24 hours that don't have replies
+                # Prioritize:
+                # 1. Tweets from verified accounts (more likely to be influential)
+                # 2. Tweets that are questions (more engagement potential)
+                # 3. Tweets with fewer replies (better chance of visibility)
+                # 4. Recent tweets
                 cursor.execute('''
                     SELECT t.* FROM tweets t
                     LEFT JOIN replies r ON t.tweet_id = r.original_tweet_id
                     WHERE r.id IS NULL
                     AND t.timestamp > datetime('now', ?)
-                    ORDER BY t.timestamp DESC
+                    AND (
+                        -- Priority 1: Tweets from specific important authors
+                        t.author IN ('elonmusk', 'VitalikButerin', 'SBF_FTX', 'cz_binance')
+                        OR
+                        -- Priority 2: Tweets that are questions or seek engagement
+                        (
+                            t.content LIKE '%?%'
+                            OR lower(t.content) LIKE '%what%'
+                            OR lower(t.content) LIKE '%how%'
+                            OR lower(t.content) LIKE '%why%'
+                            OR lower(t.content) LIKE '%when%'
+                            OR lower(t.content) LIKE '%where%'
+                            OR lower(t.content) LIKE '%who%'
+                            OR lower(t.content) LIKE '%thoughts%'
+                            OR lower(t.content) LIKE '%think%'
+                            OR lower(t.content) LIKE '%agree%'
+                        )
+                    )
+                    ORDER BY 
+                        CASE 
+                            WHEN t.author IN ('elonmusk', 'VitalikButerin', 'SBF_FTX', 'cz_binance') THEN 1
+                            WHEN t.content LIKE '%?%' THEN 2
+                            ELSE 3
+                        END,
+                        t.timestamp DESC
                     LIMIT ?
                 ''', (f'-{hours} hours', limit))
                 

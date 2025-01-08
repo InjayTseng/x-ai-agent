@@ -37,6 +37,10 @@ wheels/
 # Screenshots and media
 login_error*.png
 
+# Debug images
+debug_*.png
+error_*.png
+
 # OS specific
 .DS_Store
 Thumbs.db
