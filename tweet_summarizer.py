@@ -16,64 +16,24 @@ class TweetSummarizer:
     def get_recent_learnings(self, hours: int = 24) -> Dict:
         """Get insights from recent replies and interactions"""
         try:
-            with self.db.get_connection() as conn:
-                cursor = conn.cursor()
+            # Get recent interactions
+            end_time = datetime.now()
+            start_time = end_time - timedelta(hours=hours)
+            
+            # Get tweets and replies from the specified time period
+            interactions = self.db.get_recent_interactions(start_time.isoformat())
+            
+            if not interactions:
+                return {}
                 
-                # Get time threshold
-                time_threshold = (datetime.now() - timedelta(hours=hours)).isoformat()
-                
-                # Get recent replies with original tweets
-                cursor.execute('''
-                    SELECT 
-                        r.reply_content,
-                        t.content as original_tweet,
-                        t.author as original_author,
-                        t.hashtags,
-                        t.mentions,
-                        t.summary as tweet_summary
-                    FROM replies r
-                    JOIN tweets t ON r.original_tweet_id = t.tweet_id
-                    WHERE r.timestamp > ?
-                    ORDER BY r.timestamp DESC
-                ''', (time_threshold,))
-                
-                interactions = []
-                for row in cursor.fetchall():
-                    interaction = {
-                        'reply': row[0],
-                        'original_tweet': row[1],
-                        'author': row[2],
-                        'hashtags': json.loads(row[3]) if row[3] else [],
-                        'mentions': json.loads(row[4]) if row[4] else [],
-                        'summary': row[5]
-                    }
-                    interactions.append(interaction)
-                
-                # Get topics and themes from interactions
-                topics = {}
-                for interaction in interactions:
-                    # Add hashtags to topics
-                    for hashtag in interaction['hashtags']:
-                        topics[hashtag] = topics.get(hashtag, 0) + 1
-                    
-                    # Add key terms from summaries if available
-                    if interaction['summary']:
-                        terms = interaction['summary'].lower().split()
-                        for term in terms:
-                            if len(term) > 4:  # Only count meaningful terms
-                                topics[term] = topics.get(term, 0) + 1
-                
-                # Sort topics by frequency
-                sorted_topics = sorted(topics.items(), key=lambda x: x[1], reverse=True)[:5]
-                
-                return {
-                    'interactions': interactions,
-                    'top_topics': sorted_topics,
-                    'period_hours': hours
-                }
-                
+            return {
+                'interactions': interactions,
+                'start_time': start_time.isoformat(),
+                'end_time': end_time.isoformat()
+            }
+            
         except Exception as e:
-            logger.error(f"Error getting learning insights: {e}")
+            logger.error(f"Error getting recent learnings: {str(e)}")
             return {}
             
     def generate_summary_post(self, learnings: Dict) -> str:
@@ -81,8 +41,7 @@ class TweetSummarizer:
         try:
             # Extract key information
             interactions = learnings['interactions']
-            top_topics = learnings['top_topics']
-            period = learnings['period_hours']
+            period = (datetime.fromisoformat(learnings['end_time']) - datetime.fromisoformat(learnings['start_time'])).total_seconds() / 3600
             
             # Create a thoughtful prompt
             prompt = f"""Based on our recent Twitter interactions over the past {period} hours:
@@ -94,7 +53,7 @@ Interactions:
 } for i in interactions[:3]], indent=2)}
 
 Key topics discussed:
-{json.dumps(dict(top_topics), indent=2)}
+{json.dumps(dict([(i['hashtags'][0], len(i['hashtags'])) for i in interactions[:3]]), indent=2)}
 
 Generate a casual tweet that:
 1. Shares exactly ONE simple insight or learning (no lists or multiple points)
@@ -122,57 +81,94 @@ Make it sound like a random thought or realization, not a formal summary."""
             logger.error(f"Error generating summary: {e}")
             return ""
             
+    def generate_summary_tweet(self, tweets: List[Dict]) -> str:
+        """Generate a summary tweet based on recent interactions"""
+        try:
+            # Format tweets for the prompt
+            tweet_texts = []
+            for t in tweets:
+                # Handle topics that might be either JSON string or list
+                topics = t['topics']
+                if isinstance(topics, str):
+                    topics = json.loads(topics)
+                
+                tweet_text = f"Tweet: {t['content']}\nTopics: {', '.join(topics)}\nInsight Score: {t['insight_score']}"
+                tweet_texts.append(tweet_text)
+                
+            tweets_context = "\n\n".join(tweet_texts)
+
+            prompt = f"""Based on these recent tweets:
+
+{tweets_context}
+
+Create a casual observation about trends or patterns you notice. The tweet should:
+1. Be casual and conversational (like texting a friend)
+2. Use lowercase (like casual texting)
+3. Keep it under 200 chars
+4. NO hashtags, NO emojis, NO quotation marks
+5. Focus on insights, not just listing what happened
+6. Sound natural, not like a formal summary
+
+Example good tweet: been noticing how much a single strong coin can influence the whole market
+Example bad tweet: "Analysis of recent market trends shows significant correlation between assets"
+
+Make it sound natural and conversational, not like a report.
+IMPORTANT: Never use quotation marks in the tweet."""
+
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that generates insightful tweets about crypto and market trends. Keep responses casual and natural. Never use quotation marks."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.7
+            )
+            
+            tweet = response.choices[0].message.content.strip()
+            # Remove any quotation marks that might have slipped through
+            tweet = tweet.replace('"', '').replace('"', '').replace('"', '').replace("'", '')
+            
+            # Ensure tweet is within character limit
+            if len(tweet) > 280:
+                tweet = tweet[:277] + "..."
+                
+            return tweet
+        except Exception as e:
+            logger.error(f"Error generating summary tweet: {str(e)}")
+            return ""
+            
     async def post_summary(self, page, hours: int = 24) -> bool:
         """Post a summary of recent learnings and interactions"""
         try:
-            # Get learning insights
+            # Get recent learnings (no await since it's not async)
             learnings = self.get_recent_learnings(hours)
             if not learnings or not learnings.get('interactions'):
-                logger.error("No recent interactions to summarize")
+                logger.info("No recent interactions to summarize")
                 return False
                 
-            # Generate summary post
-            summary = self.generate_summary_post(learnings)
+            # Generate summary
+            summary = self.generate_summary_tweet(learnings['interactions'])
             if not summary:
                 logger.error("Failed to generate summary")
                 return False
                 
             logger.info(f"Generated learning summary: {summary}")
             
-            # Try posting methods with retry logic
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    # Method 1: Post from home page
-                    logger.info(f"Attempt {attempt + 1}: Posting from home page")
-                    
-                    # Navigate to home with retry
-                    for nav_attempt in range(3):
-                        try:
-                            await page.goto('https://twitter.com/home', 
-                                          wait_until='domcontentloaded',
-                                          timeout=10000)
-                            break
-                        except Exception as e:
-                            if nav_attempt == 2:
-                                raise e
-                            await page.wait_for_timeout(2000)
-                    
+                    # Go directly to compose tweet URL
+                    await page.goto('https://twitter.com/compose/tweet', 
+                                  wait_until='domcontentloaded',
+                                  timeout=10000)
                     await page.wait_for_timeout(5000)
                     
-                    # Ensure page is loaded
+                    # Ensure compose page is loaded
                     try:
-                        await page.wait_for_selector('div[data-testid="primaryColumn"]', timeout=10000)
+                        await page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=10000)
                     except Exception:
-                        raise Exception("Twitter home page did not load properly")
-                    
-                    # Click compose tweet button
-                    compose_button = await page.wait_for_selector('[data-testid="SideNav_NewTweet_Button"]', timeout=10000)
-                    if not compose_button:
-                        raise Exception("Could not find compose button")
-                    
-                    await compose_button.click()
-                    await page.wait_for_timeout(3000)
+                        raise Exception("Compose tweet page did not load properly")
                     
                     # Find and fill tweet input
                     tweet_input = await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
@@ -183,35 +179,17 @@ Make it sound like a random thought or realization, not a formal summary."""
                     await page.wait_for_timeout(3000)
                     
                     # Click tweet button
-                    tweet_button = await page.wait_for_selector('[data-testid="tweetButtonInline"]', timeout=10000)
+                    tweet_button = await page.wait_for_selector('[data-testid="tweetButton"]', timeout=10000)
                     if not tweet_button:
                         raise Exception("Could not find tweet button")
-                    
-                    # Ensure button is enabled
-                    is_disabled = await tweet_button.get_attribute('aria-disabled') == 'true'
-                    if is_disabled:
-                        raise Exception("Tweet button is disabled")
                     
                     await tweet_button.click()
                     await page.wait_for_timeout(5000)
                     
-                    # Verify post success
-                    success = False
-                    for selector in ['div[data-testid="toast"]', 'div[role="alert"]']:
-                        try:
-                            await page.wait_for_selector(selector, timeout=5000)
-                            success = True
-                            break
-                        except Exception:
-                            continue
-                    
-                    if not success:
-                        raise Exception("Could not verify tweet was posted")
-                    
                     # Save post to database
                     post_data = {
                         'content': summary,
-                        'source_tweets': json.dumps([i['original_tweet'] for i in learnings['interactions']]),
+                        'source_tweets': json.dumps([i['tweet_id'] for i in learnings['interactions']]),
                         'timestamp': datetime.now().isoformat(),
                         'status': 'posted'
                     }
@@ -221,62 +199,14 @@ Make it sound like a random thought or realization, not a formal summary."""
                     return True
                     
                 except Exception as e:
-                    logger.error(f"Attempt {attempt + 1} failed: {e}")
-                    if attempt == max_retries - 1:
-                        # Try alternative method as last resort
-                        try:
-                            logger.info("Trying alternative posting method")
-                            # Go directly to compose tweet URL
-                            await page.goto('https://twitter.com/compose/tweet', 
-                                          wait_until='domcontentloaded',
-                                          timeout=10000)
-                            await page.wait_for_timeout(5000)
-                            
-                            # Ensure compose page is loaded
-                            try:
-                                await page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=10000)
-                            except Exception:
-                                raise Exception("Compose tweet page did not load properly")
-                            
-                            # Find and fill tweet input
-                            tweet_input = await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
-                            if not tweet_input:
-                                raise Exception("Could not find tweet input in compose view")
-                            
-                            await tweet_input.fill(summary)
-                            await page.wait_for_timeout(3000)
-                            
-                            # Click tweet button
-                            tweet_button = await page.wait_for_selector('[data-testid="tweetButton"]', timeout=10000)
-                            if not tweet_button:
-                                raise Exception("Could not find tweet button in compose view")
-                            
-                            await tweet_button.click()
-                            await page.wait_for_timeout(5000)
-                            
-                            # Save post to database
-                            post_data = {
-                                'content': summary,
-                                'source_tweets': json.dumps([i['original_tweet'] for i in learnings['interactions']]),
-                                'timestamp': datetime.now().isoformat(),
-                                'status': 'posted'
-                            }
-                            self.db.save_post(post_data)
-                            
-                            logger.info("Successfully posted learning summary (alternative method)")
-                            return True
-                            
-                        except Exception as e:
-                            logger.error(f"Alternative posting method failed: {e}")
-                            return False
-                    else:
-                        # Wait before retrying
+                    logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
                         await page.wait_for_timeout(3000)
                         continue
-            
+                    return False
+                    
             return False
             
         except Exception as e:
-            logger.error(f"Error posting summary: {e}")
-            await page.screenshot(path=f'error_summary_post.png')
+            logger.error(f"Error posting summary: {str(e)}")
             return False

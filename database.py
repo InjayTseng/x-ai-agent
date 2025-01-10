@@ -15,14 +15,19 @@ class TwitterDatabase:
         """Create and return a database connection"""
         return sqlite3.connect(self.db_path)
     
-    def init_database(self):
-        """Initialize database tables"""
+    def recreate_tables(self):
+        """Drop and recreate all tables"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
+            # Drop existing tables if they exist
+            cursor.execute('DROP TABLE IF EXISTS replies')
+            cursor.execute('DROP TABLE IF EXISTS tweets')
+            cursor.execute('DROP TABLE IF EXISTS posts')
+            
             # Create tweets table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tweets (
+                CREATE TABLE tweets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tweet_id TEXT UNIQUE,
                     content TEXT,
@@ -34,13 +39,15 @@ class TwitterDatabase:
                     hashtags TEXT,
                     mentions TEXT,
                     urls TEXT,
-                    media_urls TEXT
+                    media_urls TEXT,
+                    insight_score INTEGER,
+                    topics TEXT
                 )
             ''')
             
             # Create replies table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS replies (
+                CREATE TABLE replies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     original_tweet_id TEXT,
                     reply_content TEXT,
@@ -53,7 +60,7 @@ class TwitterDatabase:
             
             # Create posts table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS posts (
+                CREATE TABLE posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     content TEXT,
                     source_tweets TEXT,  -- JSON array of tweet_ids used as source
@@ -65,6 +72,30 @@ class TwitterDatabase:
             
             conn.commit()
     
+    def init_database(self):
+        """Initialize database tables"""
+        try:
+            # Check if tables exist
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Check if tweets table has all required columns
+                cursor.execute('PRAGMA table_info(tweets)')
+                columns = {col[1] for col in cursor.fetchall()}
+                required_columns = {'insight_score', 'topics'}
+                
+                # If any required column is missing, recreate tables
+                if not required_columns.issubset(columns):
+                    logger.info("Database schema outdated, recreating tables...")
+                    self.recreate_tables()
+                    logger.info("Database tables recreated successfully")
+                else:
+                    logger.info("Database schema up to date")
+                    
+        except Exception as e:
+            logger.error(f"Error initializing database: {str(e)}")
+            raise
+    
     def save_tweet(self, tweet_data: Dict) -> bool:
         """Save a tweet to the database"""
         try:
@@ -72,19 +103,21 @@ class TwitterDatabase:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR IGNORE INTO tweets 
-                    (tweet_id, content, author, timestamp, summary, embedding, hashtags, mentions, urls, media_urls)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (tweet_id, content, author, timestamp, summary, embedding, hashtags, mentions, urls, media_urls, insight_score, topics)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     tweet_data['tweet_id'],
                     tweet_data['content'],
                     tweet_data['author'],
                     tweet_data['timestamp'],
-                    tweet_data.get('summary'),
-                    tweet_data.get('embedding'),
+                    tweet_data.get('summary', ''),
+                    tweet_data.get('embedding', '[]'),
                     json.dumps(tweet_data.get('hashtags', [])),
                     json.dumps(tweet_data.get('mentions', [])),
                     json.dumps(tweet_data.get('urls', [])),
-                    json.dumps(tweet_data.get('media_urls', []))
+                    json.dumps(tweet_data.get('media_urls', [])),
+                    tweet_data.get('insight_score'),
+                    json.dumps(tweet_data.get('topics', []))
                 ))
                 return True
         except Exception as e:
@@ -161,7 +194,7 @@ class TwitterDatabase:
                 tweet_dict = dict(zip(columns, tweet))
                 
                 # Parse JSON fields
-                for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding']:
+                for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
                     if tweet_dict.get(field):
                         tweet_dict[field] = json.loads(tweet_dict[field])
                         
@@ -222,7 +255,7 @@ class TwitterDatabase:
                 for row in cursor.fetchall():
                     tweet_dict = dict(zip(columns, row))
                     # Parse JSON fields
-                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding']:
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
                         if tweet_dict.get(field):
                             tweet_dict[field] = json.loads(tweet_dict[field])
                     tweets.append(tweet_dict)
@@ -249,3 +282,112 @@ class TwitterDatabase:
         except Exception as e:
             logger.error(f"Error checking reply status: {e}")
             return False
+
+    def has_replied_to_tweet(self, tweet_id: str) -> bool:
+        """Check if we have already replied to a tweet"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT COUNT(*) FROM replies 
+                    WHERE original_tweet_id = ?
+                ''', (tweet_id,))
+                count = cursor.fetchone()[0]
+                return count > 0
+        except Exception as e:
+            logger.error(f"Error checking if replied to tweet: {str(e)}")
+            return False  # If there's an error, assume we haven't replied
+
+    def get_most_insightful_recent_tweets(self, limit: int = 10) -> List[Dict]:
+        """Get the most insightful recent tweets, ordered by insight_score DESC"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get column names
+                cursor.execute('PRAGMA table_info(tweets)')
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                # Get recent tweets ordered by insight_score
+                cursor.execute('''
+                    SELECT *
+                    FROM tweets
+                    WHERE timestamp >= datetime('now', '-1 day')
+                    ORDER BY insight_score DESC, timestamp DESC
+                    LIMIT ?
+                ''', (limit,))
+                
+                tweets = []
+                for row in cursor.fetchall():
+                    tweet_dict = dict(zip(columns, row))
+                    # Parse JSON fields
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
+                        if tweet_dict.get(field):
+                            tweet_dict[field] = json.loads(tweet_dict[field])
+                    tweets.append(tweet_dict)
+                
+                return tweets
+                
+        except Exception as e:
+            logger.error(f"Error getting most insightful tweets: {str(e)}")
+            return []
+
+    def get_recent_interactions(self, start_time: str) -> List[Dict]:
+        """Get recent interactions (tweets and replies) from a specific time"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get recent tweets with high insight scores
+                cursor.execute('''
+                    SELECT 
+                        tweet_id,
+                        content,
+                        author,
+                        timestamp,
+                        summary,
+                        topics,
+                        insight_score,
+                        hashtags,
+                        mentions,
+                        urls,
+                        media_urls
+                    FROM tweets 
+                    WHERE timestamp > ?
+                    ORDER BY insight_score DESC, timestamp DESC
+                    LIMIT 10
+                ''', (start_time,))
+                
+                interactions = []
+                for row in cursor.fetchall():
+                    # Parse JSON fields, return empty list if parsing fails
+                    def parse_json_field(field):
+                        if not field:
+                            return []
+                        try:
+                            if isinstance(field, str):
+                                return json.loads(field)
+                            return field
+                        except:
+                            return []
+                    
+                    interaction = {
+                        'tweet_id': row[0],
+                        'content': row[1],
+                        'author': row[2],
+                        'timestamp': row[3],
+                        'summary': row[4],
+                        'topics': parse_json_field(row[5]),
+                        'insight_score': row[6],
+                        'hashtags': parse_json_field(row[7]),
+                        'mentions': parse_json_field(row[8]),
+                        'urls': parse_json_field(row[9]),
+                        'media_urls': parse_json_field(row[10])
+                    }
+                    interactions.append(interaction)
+                
+                return interactions
+                
+        except Exception as e:
+            logger.error(f"Error getting recent interactions: {str(e)}")
+            return []

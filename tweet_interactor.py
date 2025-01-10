@@ -25,18 +25,19 @@ Generate a casual reply that:
 2. Uses all lowercase (like casual texting)
 3. Keeps it under 100 chars
 4. Same language as original tweet
-5. NO hashtags, NO emojis
+5. NO hashtags, NO emojis, NO quotation marks
 6. Sounds like a friend chatting (not a formal reply)
 
-Example good reply: 'never thought about it that way'
-Example bad reply: 'Thank you for sharing! This is a very interesting perspective. Looking forward to more insights!'
+Example good reply: never thought about it that way
+Example bad reply: "Thank you for sharing! This is a very interesting perspective."
 
-Make it sound natural and conversational, not like an assistant."""
+Make it sound natural and conversational, not like an assistant.
+IMPORTANT: Never use quotation marks in the reply."""
 
             response = self.openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that generates engaging Twitter replies. Keep responses concise and relevant."},
+                    {"role": "system", "content": "You are a helpful assistant that generates engaging Twitter replies. Keep responses concise and relevant. Never use quotation marks."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=100,
@@ -44,6 +45,8 @@ Make it sound natural and conversational, not like an assistant."""
             )
             
             reply = response.choices[0].message.content.strip()
+            # Remove any quotation marks that might have slipped through
+            reply = reply.replace('"', '').replace('"', '').replace('"', '').replace("'", '')
             
             # Ensure reply is within Twitter's character limit
             if len(reply) > 280:
@@ -284,34 +287,90 @@ Make it sound natural and conversational, not like an assistant."""
                 pass
             return False
             
-    async def reply_to_recent_tweets(self, page, max_tweets: int = 5) -> None:
-        """Reply to recent tweets from the database"""
+    async def reply_to_recent_tweets(self, page) -> None:
+        """Reply to recent tweets, prioritizing those with high insight scores"""
         try:
-            # Get recent tweets that haven't been replied to
-            recent_tweets = self.db.get_recent_unreplied_tweets(limit=max_tweets)
+            # Get most insightful recent tweets
+            tweets = self.db.get_most_insightful_recent_tweets(limit=10)
             
-            if not recent_tweets:
-                logger.info("No new tweets to reply to")
+            if not tweets:
+                logger.info("No recent insightful tweets found to reply to")
                 return
                 
-            logger.info(f"Found {len(recent_tweets)} tweets to reply to")
-            
-            for tweet in recent_tweets:
-                # Check if we've already replied to this tweet
-                if self.db.has_reply(tweet['tweet_id']):
-                    logger.info(f"Already replied to tweet {tweet['tweet_id']}, skipping...")
+            for tweet in tweets:
+                try:
+                    # Try to check if we've already replied, but don't block on errors
+                    try:
+                        if self.db.has_replied_to_tweet(tweet['tweet_id']):
+                            logger.info(f"Already replied to tweet {tweet['tweet_id']}, skipping...")
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Could not check reply status for tweet {tweet['tweet_id']}: {str(e)}")
+                    
+                    # Only reply to tweets with insight score above 50
+                    if tweet.get('insight_score', 0) <= 50:
+                        logger.info(f"Tweet {tweet['tweet_id']} insight score too low ({tweet.get('insight_score')}), skipping...")
+                        continue
+                        
+                    # Generate reply
+                    reply_text = self.generate_reply(tweet)
+                    if not reply_text:
+                        continue
+                        
+                    # Navigate to tweet
+                    tweet_url = f"https://twitter.com/i/status/{tweet['tweet_id']}"
+                    await page.goto(tweet_url)
+                    await page.wait_for_timeout(3000)  # Wait for page load
+                    
+                    # Find and click reply button
+                    reply_button = await page.wait_for_selector('[data-testid="reply"]', timeout=10000)
+                    if not reply_button:
+                        logger.error(f"Could not find reply button for tweet {tweet['tweet_id']}")
+                        continue
+                    await reply_button.click()
+                    
+                    # Find reply input and type reply
+                    reply_input = await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
+                    if not reply_input:
+                        logger.error(f"Could not find reply input for tweet {tweet['tweet_id']}")
+                        continue
+                    await reply_input.fill(reply_text)
+                    
+                    # Find and click tweet button
+                    tweet_button = await page.wait_for_selector('[data-testid="tweetButton"]', timeout=10000)
+                    if not tweet_button:
+                        logger.error(f"Could not find tweet button for tweet {tweet['tweet_id']}")
+                        continue
+                    
+                    # Check if button is enabled
+                    is_enabled = await tweet_button.is_enabled()
+                    if not is_enabled:
+                        logger.error(f"Tweet button is disabled for tweet {tweet['tweet_id']}")
+                        continue
+                        
+                    await tweet_button.click()
+                    await page.wait_for_timeout(2000)  # Wait for reply to be sent
+                    
+                    # Try to save reply to database, but don't block on errors
+                    try:
+                        self.db.save_reply({
+                            'original_tweet_id': tweet['tweet_id'],
+                            'reply_content': reply_text,
+                            'timestamp': datetime.now().isoformat(),
+                            'status': 'sent'
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not save reply for tweet {tweet['tweet_id']}: {str(e)}")
+                    
+                    logger.info(f"Successfully replied to tweet {tweet['tweet_id']} (insight score: {tweet.get('insight_score')})")
+                    
+                    # Add delay between replies to avoid rate limiting
+                    await page.wait_for_timeout(5000)
+                    
+                except Exception as e:
+                    logger.error(f"Error replying to tweet {tweet['tweet_id']}: {str(e)}")
                     continue
                     
-                # Add delay between replies to avoid rate limiting
-                await page.wait_for_timeout(5000)
-                
-                # Reply to tweet
-                success = await self.reply_to_tweet(page, tweet)
-                if success:
-                    logger.info(f"Successfully replied to tweet {tweet['tweet_id']}")
-                else:
-                    logger.error(f"Failed to reply to tweet {tweet['tweet_id']}")
-                
         except Exception as e:
             logger.error(f"Error in reply_to_recent_tweets: {str(e)}")
             raise

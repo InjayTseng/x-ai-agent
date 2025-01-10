@@ -98,7 +98,86 @@ class TweetAnalyzer:
             logger.error(f"Error generating embedding: {str(e)}")
             return []
 
-    async def fetch_and_learn_tweets(self, page, max_tweets: int = 10) -> None:
+    def generate_insight_score(self, content: str) -> int:
+        """Generate an insight score (0-100) for the tweet content using OpenAI"""
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": """You are an expert at evaluating the insightfulness of tweets.
+Rate tweets on a scale of 0-100 based on:
+- Uniqueness of perspective (30%)
+- Depth of analysis (30%)
+- Practical value (20%)
+- Clarity of expression (20%)
+
+Return ONLY the numeric score, nothing else."""},
+                    {"role": "user", "content": f"Rate this tweet's insightfulness (0-100): {content}"}
+                ],
+                max_tokens=10,
+                temperature=0.3
+            )
+            
+            # Extract numeric score from response
+            score_str = response.choices[0].message.content.strip()
+            try:
+                score = int(score_str)
+                return max(0, min(100, score))  # Ensure score is between 0 and 100
+            except ValueError:
+                logger.error(f"Failed to parse insight score: {score_str}")
+                return 50  # Default score if parsing fails
+                
+        except Exception as e:
+            logger.error(f"Error generating insight score: {str(e)}")
+            return 50  # Default score if API call fails
+
+    def generate_topics(self, content: str) -> List[str]:
+        """Generate a list of topics for the tweet content using OpenAI"""
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": """You are an expert at identifying specific topics in tweets.
+Extract 1-3 main topics. Topics MUST be:
+- Single word only
+- Extremely specific (no vague terms like 'technology', 'business', 'industry')
+- Lowercase with no special characters
+
+Common mappings to use:
+- "cryptocurrency trading" -> "crypto"
+- "ai technology" -> "ai"
+- "bsc ecosystem" -> "bsc"
+- "creator community" -> "creator"
+- "market trends" -> "trends"
+- "web3" -> "web3"
+- "nft" -> "nft"
+- "defi" -> "defi"
+
+Return ONLY a comma-separated list of topics, no other text.
+Example: "crypto, ai, nft"
+
+If no specific topics can be identified, return an empty string."""},
+                    {"role": "user", "content": f"Extract specific topics from this tweet: {content}"}
+                ],
+                max_tokens=50,
+                temperature=0.3
+            )
+            
+            # Parse topics from response
+            topics_str = response.choices[0].message.content.strip()
+            if not topics_str:  # If empty string returned
+                return []
+                
+            topics = [topic.strip() for topic in topics_str.split(',')]
+            # Filter out any multi-word topics or empty strings
+            topics = [t for t in topics if t and ' ' not in t]
+            return topics[:3]  # Ensure we return at most 3 topics
+                
+        except Exception as e:
+            logger.error(f"Error generating topics: {str(e)}")
+            return []  # Return empty list if API call fails
+
+    async def fetch_and_learn_tweets(self, page, max_tweets: int = 3) -> None:
         """Fetch tweets from home page, analyze them, and save to database"""
         try:
             # Navigate to home page
@@ -131,19 +210,23 @@ class TweetAnalyzer:
                         logger.info(f"Tweet {tweet_data['tweet_id']} already exists, skipping...")
                         continue
                     
-                    # Generate summary and embedding
+                    # Generate summary, embedding, insight score, and topics
                     summary = self.summarize_tweet(tweet_data['content'])
                     embedding = self.generate_embedding(tweet_data['content'])
+                    insight_score = self.generate_insight_score(tweet_data['content'])
+                    topics = self.generate_topics(tweet_data['content'])
                     
                     # Add to tweet data
                     tweet_data['summary'] = summary
                     tweet_data['embedding'] = json.dumps(embedding)
+                    tweet_data['insight_score'] = insight_score
+                    tweet_data['topics'] = topics
                     
                     # Save to database
                     self.db.save_tweet(tweet_data)
                     
                     processed_count += 1
-                    logger.info(f"Processed and saved tweet {tweet_data['tweet_id']}")
+                    logger.info(f"Processed and saved tweet {tweet_data['tweet_id']} with topics: {topics} and insight score: {insight_score}")
                     
                     # Add small delay between processing
                     await page.wait_for_timeout(500)
