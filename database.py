@@ -166,19 +166,42 @@ class TwitterDatabase:
             print(f"Error saving post: {e}")
             return False
     
-    def get_recent_tweets(self, limit: int = 10) -> List[Dict]:
+    def get_recent_tweets(self, start_time: str = None, limit: int = 10) -> List[Dict]:
         """Retrieve recent tweets from the database"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT tweet_id, content, author, timestamp, summary
-                FROM tweets
-                ORDER BY timestamp DESC
-                LIMIT ?
-            ''', (limit,))
-            
-            columns = ['tweet_id', 'content', 'author', 'timestamp', 'summary']
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if start_time:
+                    cursor.execute('''
+                        SELECT * FROM tweets
+                        WHERE timestamp > ?
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    ''', (start_time, limit))
+                else:
+                    cursor.execute('''
+                        SELECT * FROM tweets
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    ''', (limit,))
+                
+                columns = [description[0] for description in cursor.description]
+                tweets = []
+                
+                for row in cursor.fetchall():
+                    tweet_dict = dict(zip(columns, row))
+                    # Parse JSON fields
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics', 'tokens']:
+                        if tweet_dict.get(field):
+                            tweet_dict[field] = json.loads(tweet_dict[field])
+                    tweets.append(tweet_dict)
+                
+                return tweets
+                
+        except Exception as e:
+            logger.error(f"Error getting recent tweets: {e}")
+            return []
     
     def get_tweet_by_id(self, tweet_id: str) -> Optional[Dict]:
         """Get a tweet by its ID"""

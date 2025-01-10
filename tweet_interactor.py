@@ -3,6 +3,7 @@ from typing import Dict, Optional
 import json
 from datetime import datetime, timedelta
 from openai import OpenAI
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ class TweetInteractor:
 Generate a casual reply that:
 1. Stays relevant to the tweet
 2. Uses all lowercase (like casual texting)
-3. Keeps it under 100 chars
+3. Keeps it under 70 chars
 4. Same language as original tweet
 5. NO hashtags, NO emojis, NO quotation marks
 6. Sounds like a friend chatting (not a formal reply)
@@ -287,17 +288,25 @@ IMPORTANT: Never use quotation marks in the reply."""
                 pass
             return False
             
-    async def reply_to_recent_tweets(self, page) -> None:
+    async def reply_to_recent_tweets(self, page, max_replies: int = 3) -> None:
         """Reply to recent tweets, prioritizing those with high insight scores"""
         try:
-            # Get most insightful recent tweets
-            tweets = self.db.get_most_insightful_recent_tweets(limit=10)
+            # Get recent tweets from the last 24 hours
+            recent_tweets = self.db.get_recent_tweets(
+                start_time=(datetime.now() - timedelta(hours=24)).isoformat()
+            )
             
-            if not tweets:
-                logger.info("No recent insightful tweets found to reply to")
+            if not recent_tweets:
+                logger.info("No recent tweets found to reply to")
                 return
                 
-            for tweet in tweets:
+            # Sort by insight score (highest first)
+            recent_tweets.sort(key=lambda x: x.get('insight_score', 0), reverse=True)
+            
+            # Only take the specified number of tweets
+            tweets_to_reply = recent_tweets[:max_replies]
+            
+            for tweet in tweets_to_reply:
                 try:
                     # Try to check if we've already replied, but don't block on errors
                     try:
@@ -307,8 +316,9 @@ IMPORTANT: Never use quotation marks in the reply."""
                     except Exception as e:
                         logger.warning(f"Could not check reply status for tweet {tweet['tweet_id']}: {str(e)}")
                     
-                    # Only reply to tweets with insight score above 50
-                    if tweet.get('insight_score', 0) <= 50:
+                    # Only reply to tweets with insight score above threshold
+                    min_score = int(os.getenv('MIN_INSIGHT_SCORE', 7))
+                    if tweet.get('insight_score', 0) <= min_score:
                         logger.info(f"Tweet {tweet['tweet_id']} insight score too low ({tweet.get('insight_score')}), skipping...")
                         continue
                         
