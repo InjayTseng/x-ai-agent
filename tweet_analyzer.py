@@ -177,7 +177,49 @@ If no specific topics can be identified, return an empty string."""},
             logger.error(f"Error generating topics: {str(e)}")
             return []  # Return empty list if API call fails
 
-    async def fetch_and_learn_tweets(self, page, max_tweets: int = 3) -> None:
+    def extract_tokens(self, content: str) -> List[str]:
+        """Extract token names and $symbols from tweet content using OpenAI"""
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": """You are an expert at identifying crypto token names and symbols in tweets.
+Extract all token names and $symbols. Rules:
+1. Include both explicit symbols (starting with $) and token names
+2. Remove any $ prefix
+3. Convert all to uppercase
+4. Return ONLY the unique token list, no other text
+5. If unsure about a token, don't include it
+
+Example tweet: "Just bought some $eth and bitcoin, thinking about Solana too"
+Example response: ETH, BTC, SOL
+
+Example tweet: "The PEPE and $WOJAK charts looking bullish"
+Example response: PEPE, WOJAK
+
+Return ONLY a comma-separated list of tokens, no other text.
+If no tokens found, return an empty string."""},
+                    {"role": "user", "content": f"Extract token names and symbols from this tweet: {content}"}
+                ],
+                max_tokens=50,
+                temperature=0.3
+            )
+            
+            tokens_str = response.choices[0].message.content.strip()
+            if not tokens_str:
+                return []
+                
+            # Split and clean tokens
+            tokens = [token.strip().upper() for token in tokens_str.split(',')]
+            # Remove any empty strings
+            tokens = [t for t in tokens if t]
+            return tokens
+            
+        except Exception as e:
+            logger.error(f"Error extracting tokens: {str(e)}")
+            return []
+
+    async def fetch_and_learn_tweets(self, page, max_tweets: int = 8) -> None:
         """Fetch tweets from home page, analyze them, and save to database"""
         try:
             # Navigate to home page
@@ -204,7 +246,7 @@ If no specific topics can be identified, return an empty string."""},
                     tweet_data = await self.extract_tweet_data(article)
                     if not tweet_data or not tweet_data['tweet_id']:
                         continue
-                        
+                    
                     # Check if tweet already exists
                     if self.db.get_tweet_by_id(tweet_data['tweet_id']):
                         logger.info(f"Tweet {tweet_data['tweet_id']} already exists, skipping...")
@@ -215,18 +257,20 @@ If no specific topics can be identified, return an empty string."""},
                     embedding = self.generate_embedding(tweet_data['content'])
                     insight_score = self.generate_insight_score(tweet_data['content'])
                     topics = self.generate_topics(tweet_data['content'])
+                    tokens = self.extract_tokens(tweet_data['content'])
                     
                     # Add to tweet data
                     tweet_data['summary'] = summary
                     tweet_data['embedding'] = json.dumps(embedding)
                     tweet_data['insight_score'] = insight_score
                     tweet_data['topics'] = topics
+                    tweet_data['tokens'] = tokens
                     
                     # Save to database
                     self.db.save_tweet(tweet_data)
                     
                     processed_count += 1
-                    logger.info(f"Processed and saved tweet {tweet_data['tweet_id']} with topics: {topics} and insight score: {insight_score}")
+                    logger.info(f"Processed and saved tweet {tweet_data['tweet_id']} with topics: {topics}, tokens: {tokens}, and insight score: {insight_score}")
                     
                     # Add small delay between processing
                     await page.wait_for_timeout(500)

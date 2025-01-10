@@ -41,7 +41,8 @@ class TwitterDatabase:
                     urls TEXT,
                     media_urls TEXT,
                     insight_score INTEGER,
-                    topics TEXT
+                    topics TEXT,
+                    tokens TEXT
                 )
             ''')
             
@@ -82,7 +83,7 @@ class TwitterDatabase:
                 # Check if tweets table has all required columns
                 cursor.execute('PRAGMA table_info(tweets)')
                 columns = {col[1] for col in cursor.fetchall()}
-                required_columns = {'insight_score', 'topics'}
+                required_columns = {'insight_score', 'topics', 'tokens'}
                 
                 # If any required column is missing, recreate tables
                 if not required_columns.issubset(columns):
@@ -103,8 +104,8 @@ class TwitterDatabase:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR IGNORE INTO tweets 
-                    (tweet_id, content, author, timestamp, summary, embedding, hashtags, mentions, urls, media_urls, insight_score, topics)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (tweet_id, content, author, timestamp, summary, embedding, hashtags, mentions, urls, media_urls, insight_score, topics, tokens)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     tweet_data['tweet_id'],
                     tweet_data['content'],
@@ -117,7 +118,8 @@ class TwitterDatabase:
                     json.dumps(tweet_data.get('urls', [])),
                     json.dumps(tweet_data.get('media_urls', [])),
                     tweet_data.get('insight_score'),
-                    json.dumps(tweet_data.get('topics', []))
+                    json.dumps(tweet_data.get('topics', [])),
+                    json.dumps(tweet_data.get('tokens', []))
                 ))
                 return True
         except Exception as e:
@@ -194,7 +196,7 @@ class TwitterDatabase:
                 tweet_dict = dict(zip(columns, tweet))
                 
                 # Parse JSON fields
-                for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
+                for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics', 'tokens']:
                     if tweet_dict.get(field):
                         tweet_dict[field] = json.loads(tweet_dict[field])
                         
@@ -255,7 +257,7 @@ class TwitterDatabase:
                 for row in cursor.fetchall():
                     tweet_dict = dict(zip(columns, row))
                     # Parse JSON fields
-                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics', 'tokens']:
                         if tweet_dict.get(field):
                             tweet_dict[field] = json.loads(tweet_dict[field])
                     tweets.append(tweet_dict)
@@ -321,7 +323,7 @@ class TwitterDatabase:
                 for row in cursor.fetchall():
                     tweet_dict = dict(zip(columns, row))
                     # Parse JSON fields
-                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics']:
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'embedding', 'topics', 'tokens']:
                         if tweet_dict.get(field):
                             tweet_dict[field] = json.loads(tweet_dict[field])
                     tweets.append(tweet_dict)
@@ -351,7 +353,8 @@ class TwitterDatabase:
                         hashtags,
                         mentions,
                         urls,
-                        media_urls
+                        media_urls,
+                        tokens
                     FROM tweets 
                     WHERE timestamp > ?
                     ORDER BY insight_score DESC, timestamp DESC
@@ -382,7 +385,8 @@ class TwitterDatabase:
                         'hashtags': parse_json_field(row[7]),
                         'mentions': parse_json_field(row[8]),
                         'urls': parse_json_field(row[9]),
-                        'media_urls': parse_json_field(row[10])
+                        'media_urls': parse_json_field(row[10]),
+                        'tokens': parse_json_field(row[11])
                     }
                     interactions.append(interaction)
                 
