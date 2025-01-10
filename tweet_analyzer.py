@@ -219,7 +219,7 @@ If no tokens found, return an empty string."""},
             logger.error(f"Error extracting tokens: {str(e)}")
             return []
 
-    async def fetch_and_learn_tweets(self, page, max_tweets: int = 8) -> None:
+    async def fetch_and_learn_tweets(self, page, max_tweets: int = 50) -> None:
         """Fetch tweets from home page, analyze them, and save to database"""
         try:
             # Navigate to home page

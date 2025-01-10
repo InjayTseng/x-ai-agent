@@ -104,7 +104,7 @@ Make it sound like a random thought or realization, not a formal summary."""
 Create a casual observation about trends or patterns you notice. The tweet should:
 1. Be casual and conversational (like texting a friend)
 2. Use lowercase (like casual texting)
-3. Keep it under 200 chars
+3. Keep it under 100 chars
 4. NO hashtags, NO emojis, NO quotation marks
 5. Focus on insights, not just listing what happened
 6. Sound natural, not like a formal summary
@@ -112,6 +112,7 @@ Create a casual observation about trends or patterns you notice. The tweet shoul
 Example good tweet: been noticing how much a single strong coin can influence the whole market
 Example bad tweet: "Analysis of recent market trends shows significant correlation between assets"
 
+Post in traditional chinese by default.
 Make it sound natural and conversational, not like a report.
 IMPORTANT: Never use quotation marks in the tweet."""
 
