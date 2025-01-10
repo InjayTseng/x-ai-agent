@@ -24,9 +24,9 @@ class TwitterAgent:
         # Initialize components
         self.db = TwitterDatabase()
         self.browser = TwitterBrowser()
-        self.analyzer = TweetAnalyzer(self.db, os.getenv('OPENAI_API_KEY'))
-        self.interactor = TweetInteractor(self.db, os.getenv('OPENAI_API_KEY'))
-        self.summarizer = TweetSummarizer(self.db, os.getenv('OPENAI_API_KEY'))
+        self.analyzer = TweetAnalyzer(self.db)
+        self.summarizer = TweetSummarizer(self.db)
+        self.interactor = TweetInteractor(self.db)
         
         # Load intervals (convert minutes to seconds)
         self.scan_interval = int(os.getenv('SCAN_INTERVAL', 60)) * 60

@@ -4,14 +4,17 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from openai import OpenAI
 from database import TwitterDatabase
+import httpx
+import os
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TweetSummarizer:
-    def __init__(self, db: TwitterDatabase, api_key: str):
-        """Initialize TweetSummarizer with database and OpenAI client"""
+    def __init__(self, db: TwitterDatabase):
+        """Initialize the TweetSummarizer with database and OpenAI client"""
         self.db = db
-        self.openai_client = OpenAI(api_key=api_key)
+        self.openai_client = OpenAI(http_client=httpx.Client())
         
     def get_recent_learnings(self, hours: int = 24) -> Dict:
         """Get insights from recent replies and interactions"""

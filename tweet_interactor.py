@@ -3,16 +3,17 @@ from typing import Dict, Optional
 import json
 from datetime import datetime, timedelta
 from openai import OpenAI
+import httpx
 import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TweetInteractor:
-    def __init__(self, db, api_key: str):
+    def __init__(self, db):
         """Initialize TweetInteractor with database and OpenAI client"""
         self.db = db
-        self.openai_client = OpenAI(api_key=api_key)
+        self.openai_client = OpenAI(http_client=httpx.Client())
         
     def generate_reply(self, tweet_data: Dict) -> str:
         """Generate a reply using OpenAI based on tweet content and context"""

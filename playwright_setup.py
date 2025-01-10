@@ -16,10 +16,17 @@ class TwitterBrowser:
     async def start(self, headless: bool = True) -> bool:
         """Start the browser"""
         try:
+            # Force headless mode in production environment
+            is_production = os.environ.get('RAILWAY_ENVIRONMENT') == 'production'
+            headless = True if is_production else headless
+            
             playwright = await async_playwright().start()
-            self.browser = await playwright.chromium.launch(headless=headless)
+            self.browser = await playwright.chromium.launch(
+                headless=headless,
+                args=['--no-sandbox', '--disable-setuid-sandbox']
+            )
             self.context = await self.browser.new_context(
-                viewport={'width': 1280, 'height': 800},
+                viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             self.page = await self.context.new_page()

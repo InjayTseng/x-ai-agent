@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 import re
 from openai import OpenAI
+import httpx
 import time
 from database import TwitterDatabase
 
@@ -11,10 +12,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TweetAnalyzer:
-    def __init__(self, db: TwitterDatabase, api_key: str):
+    def __init__(self, db: TwitterDatabase):
         """Initialize the TweetAnalyzer with database and OpenAI client"""
         self.db = db
-        self.openai_client = OpenAI(api_key=api_key)
+        self.openai_client = OpenAI(http_client=httpx.Client())
         
     async def extract_tweet_data(self, article) -> Dict:
         """Extract relevant data from a tweet article element"""
