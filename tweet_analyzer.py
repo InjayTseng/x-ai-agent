@@ -228,20 +228,26 @@ If no tokens found, return an empty string."""},
     async def fetch_and_learn_tweets(self, page, max_tweets: int = 50) -> None:
         """Fetch tweets from home page, analyze them, and save to database"""
         try:
-            # Navigate to home page with longer timeout and wait until network is idle
+            # Navigate to home page with less strict wait conditions
             logger.info("Navigating to Twitter home page...")
             await page.goto(
                 "https://twitter.com/home",
-                wait_until="networkidle",
-                timeout=30000
+                wait_until="domcontentloaded",  
+                timeout=20000
             )
-            await page.wait_for_timeout(5000)  # 增加等待時間
             
-            # 確保頁面已完全加載
+            # 等待頁面基本元素出現
             try:
-                await page.wait_for_load_state("networkidle", timeout=30000)
+                await page.wait_for_selector(
+                    '[data-testid="primaryColumn"]',
+                    timeout=10000,
+                    state="visible"
+                )
             except Exception as e:
-                logger.warning(f"Wait for load state failed: {str(e)}")
+                logger.warning(f"Wait for primary column failed: {str(e)}")
+            
+            # 給頁面一些時間加載內容
+            await page.wait_for_timeout(5000)
             
             # Wait for tweet articles to appear with retry
             logger.info("Waiting for tweets to load...")
@@ -253,7 +259,7 @@ If no tokens found, return an empty string."""},
                     # 等待任意推文出現
                     await page.wait_for_selector(
                         'article[data-testid="tweet"]',
-                        timeout=20000,
+                        timeout=10000,
                         state="visible"
                     )
                     
@@ -261,11 +267,11 @@ If no tokens found, return an empty string."""},
                     for _ in range(3):
                         await page.evaluate("""
                             window.scrollBy({
-                                top: 500,
+                                top: 300,
                                 behavior: 'smooth'
                             });
                         """)
-                        await page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(1000)
                     
                     # 使用 JavaScript 獲取推文
                     articles = await page.evaluate("""
@@ -277,7 +283,7 @@ If no tokens found, return an empty string."""},
                 except Exception as e:
                     logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
                     if attempt < max_retries - 1:
-                        await page.wait_for_timeout(5000)
+                        await page.wait_for_timeout(3000)
                         continue
                     raise Exception("Failed to load tweets after multiple attempts")
             
