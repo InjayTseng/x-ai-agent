@@ -74,7 +74,7 @@ class TweetAnalyzer:
         """Use OpenAI to generate a summary of the tweet"""
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that summarizes tweets. Keep summaries concise and capture the main point."},
                     {"role": "user", "content": f"Please summarize this tweet in one short sentence: {content}"}
@@ -103,14 +103,15 @@ class TweetAnalyzer:
         """Generate an insight score (0-100) for the tweet content using OpenAI"""
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": """You are an expert at evaluating the insightfulness of tweets.
 Rate tweets on a scale of 0-100 based on:
-- Uniqueness of perspective (30%)
-- Depth of analysis (30%)
-- Practical value (20%)
-- Clarity of expression (20%)
+- Uniqueness of perspective (25%)
+- Depth of analysis (20%)
+- Call to action (10%)
+- Humor (20%)
+- Mention of specific tokens (25%)
 
 Return ONLY the numeric score, nothing else."""},
                     {"role": "user", "content": f"Rate this tweet's insightfulness (0-100): {content}"}
@@ -136,7 +137,7 @@ Return ONLY the numeric score, nothing else."""},
         """Generate a list of topics for the tweet content using OpenAI"""
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": """You are an expert at identifying specific topics in tweets.
 Extract 1-3 main topics. Topics MUST be:
@@ -182,7 +183,7 @@ If no specific topics can be identified, return an empty string."""},
         """Extract token names and $symbols from tweet content using OpenAI"""
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": """You are an expert at identifying crypto token names and symbols in tweets.
 Extract all token names and $symbols. Rules:

@@ -71,7 +71,7 @@ Example bad tweet: 'Learning from @user about Project X and seeing great progres
 Make it sound like a random thought or realization, not a formal summary."""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=150,
                 temperature=0.7
@@ -120,7 +120,7 @@ Make it sound natural and conversational, not like a report.
 IMPORTANT: Never use quotation marks in the tweet."""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that generates insightful tweets about crypto and market trends. Keep responses casual and natural. Never use quotation marks."},
                     {"role": "user", "content": prompt}
@@ -142,22 +142,96 @@ IMPORTANT: Never use quotation marks in the tweet."""
             logger.error(f"Error generating summary tweet: {str(e)}")
             return ""
             
-    async def post_summary(self, page, hours: int = 24) -> bool:
-        """Post a summary of recent learnings and interactions"""
+    def get_reference_tweets(self, limit: int = 5) -> List[Dict]:
+        """Get reference tweets for summary generation, ordered by insight score and recency"""
+        query = """
+        SELECT t.* 
+        FROM tweets t 
+        LEFT JOIN posts p ON t.tweet_id = p.source_tweets  
+        WHERE p.id IS NULL  
+        AND t.insight_score IS NOT NULL
+        AND t.insight_score > 0
+        ORDER BY t.insight_score DESC, t.timestamp DESC
+        LIMIT ?
+        """
+        
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (limit,))
+            columns = [description[0] for description in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            return results
+
+    def generate_insight_summary(self) -> Optional[Dict]:
+        """Generate a summary tweet based on high-insight, unposted recent tweets"""
         try:
-            # Get recent learnings (no await since it's not async)
-            learnings = self.get_recent_learnings(hours)
-            if not learnings or not learnings.get('interactions'):
-                logger.info("No recent interactions to summarize")
+            # 獲取參考推文
+            reference_tweets = self.get_reference_tweets(limit=5)
+            if not reference_tweets:
+                logger.info("No suitable reference tweets found for summary")
+                return None
+
+            # 準備提示詞
+            tweets_text = "\n".join([
+                f"- {tweet['content']} (Insight: {tweet['insight_score']})"
+                for tweet in reference_tweets
+            ])
+            
+            prompt = f"""Based on these high-insight tweets:
+
+{tweets_text}
+
+Generate an insightful tweet that captures the key trends or insights. 
+Requirements:
+1. Be original, don't just summarize
+2. Add your own insights and perspective
+3. Keep it casual and engaging
+4. Maximum 120 characters
+5. Focus on the highest insight topics
+6. No hashtags, no emojis, no quotation marks
+
+Please use traditional chinese by default.
+IMPORTANT: Never use quotation marks in the tweet."""
+
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that generates insightful tweets about crypto and market trends. Keep responses casual and natural. Never use quotation marks."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=150,
+                temperature=0.7
+            )
+
+            summary_tweet = response.choices[0].message.content.strip()
+            
+            if summary_tweet:
+                # 返回包含所有必要信息的字典
+                return {
+                    'content': summary_tweet,
+                    'reference_tweets': reference_tweets,
+                    'main_reference': reference_tweets[0]['tweet_id'] if reference_tweets else None
+                }
+            
+            return None
+
+        except Exception as e:
+            logger.error(f"Error generating summary tweet: {str(e)}")
+            return None
+
+    async def post_summary(self, page, hours: int = 24) -> bool:
+        """Post a summary of recent learnings"""
+        try:
+            # Generate insight-based summary
+            summary_data = self.generate_insight_summary()
+            if not summary_data:
+                logger.error("Failed to generate any summary")
                 return False
                 
-            # Generate summary
-            summary = self.generate_summary_tweet(learnings['interactions'])
-            if not summary:
-                logger.error("Failed to generate summary")
-                return False
-                
-            logger.info(f"Generated learning summary: {summary}")
+            summary = summary_data['content']
+            logger.info(f"Generated summary: {summary}")
             
             max_retries = 3
             for attempt in range(max_retries):
@@ -190,10 +264,12 @@ IMPORTANT: Never use quotation marks in the tweet."""
                     await tweet_button.click()
                     await page.wait_for_timeout(5000)
                     
-                    # Save post to database
+                    # Save post to database with complete reference information
                     post_data = {
                         'content': summary,
-                        'source_tweets': json.dumps([i['tweet_id'] for i in learnings['interactions']]),
+                        'type': 'insight',
+                        'reference_tweet_id': summary_data['main_reference'],
+                        'source_tweets': json.dumps([t['tweet_id'] for t in summary_data['reference_tweets']]),
                         'timestamp': datetime.now().isoformat(),
                         'status': 'posted'
                     }

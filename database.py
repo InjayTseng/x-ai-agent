@@ -64,10 +64,13 @@ class TwitterDatabase:
                 CREATE TABLE posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     content TEXT,
+                    type TEXT,  -- 'summary' or 'insight' or other types
+                    reference_tweet_id TEXT,  -- Reference to the main tweet used
                     source_tweets TEXT,  -- JSON array of tweet_ids used as source
-                    timestamp DATETIME,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     status TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (reference_tweet_id) REFERENCES tweets (tweet_id)
                 )
             ''')
             
@@ -153,10 +156,12 @@ class TwitterDatabase:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO posts 
-                    (content, source_tweets, timestamp, status)
-                    VALUES (?, ?, ?, ?)
+                    (content, type, reference_tweet_id, source_tweets, timestamp, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 ''', (
                     post_data['content'],
+                    post_data['type'],
+                    post_data['reference_tweet_id'],
                     json.dumps(post_data['source_tweets']),
                     post_data['timestamp'],
                     post_data['status']

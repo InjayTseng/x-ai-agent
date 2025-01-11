@@ -37,7 +37,7 @@ Make it sound natural and conversational, not like an assistant.
 IMPORTANT: Never use quotation marks in the reply."""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that generates engaging Twitter replies. Keep responses concise and relevant. Never use quotation marks."},
                     {"role": "user", "content": prompt}
