@@ -232,7 +232,7 @@ If no tokens found, return an empty string."""},
             logger.info("Navigating to Twitter home page...")
             await page.goto(
                 "https://twitter.com/home",
-                wait_until="domcontentloaded",  
+                wait_until="domcontentloaded",
                 timeout=20000
             )
             
@@ -273,10 +273,8 @@ If no tokens found, return an empty string."""},
                         """)
                         await page.wait_for_timeout(1000)
                     
-                    # 使用 JavaScript 獲取推文
-                    articles = await page.evaluate("""
-                        Array.from(document.querySelectorAll('article[data-testid="tweet"]'))
-                    """)
+                    # 使用 Playwright 的 query_selector_all 獲取推文
+                    articles = await page.query_selector_all('article[data-testid="tweet"]')
                     
                     if articles:
                         break
@@ -294,8 +292,8 @@ If no tokens found, return an empty string."""},
             
             for article in articles[:max_tweets]:
                 try:
-                    # 使用 JavaScript 提取推文數據
-                    tweet_data = await article.evaluate("""(article) => {
+                    # 使用 JavaScript 一次性提取所有需要的數據
+                    tweet_data = await page.evaluate("""(article) => {
                         const getText = (selector) => {
                             const elem = article.querySelector(selector);
                             return elem ? elem.innerText : '';
@@ -309,26 +307,38 @@ If no tokens found, return an empty string."""},
                         const tweet_text = getText('[data-testid="tweetText"]');
                         const tweet_url = getAttr('a[href*="/status/"]', 'href');
                         const tweet_id = tweet_url ? tweet_url.split('/status/').pop() : null;
-                        const author = getText('[data-testid="User-Name"]').split('·')[0].trim();
+                        const author_text = getText('[data-testid="User-Name"]');
+                        const author = author_text ? author_text.split('·')[0].trim() : '';
                         const timestamp = getAttr('time', 'datetime');
+                        
+                        const media_urls = Array.from(
+                            article.querySelectorAll('img[src*="media"]')
+                        ).map(img => img.src);
+                        
+                        const hashtags = [...(tweet_text.matchAll(/#(\w+)/g) || [])].map(m => m[1]);
+                        const mentions = [...(tweet_text.matchAll(/@(\w+)/g) || [])].map(m => m[1]);
+                        const urls = [...(tweet_text.matchAll(/https?:\/\/\S+/g) || [])].map(m => m[0]);
                         
                         return {
                             tweet_id: tweet_id,
                             content: tweet_text,
                             author: author,
                             timestamp: timestamp,
-                            hashtags: JSON.stringify([...tweet_text.matchAll(/#(\w+)/g)].map(m => m[1])),
-                            mentions: JSON.stringify([...tweet_text.matchAll(/@(\w+)/g)].map(m => m[1])),
-                            urls: JSON.stringify([...tweet_text.matchAll(/https?:\/\/\S+/g)].map(m => m[0])),
-                            media_urls: JSON.stringify(
-                                Array.from(article.querySelectorAll('img[src*="media"]'))
-                                    .map(img => img.src)
-                            )
+                            hashtags: hashtags,
+                            mentions: mentions,
+                            urls: urls,
+                            media_urls: media_urls
                         };
                     }""", article)
                     
-                    if not tweet_data or not tweet_data['tweet_id']:
+                    if not tweet_data or not tweet_data.get('tweet_id'):
                         continue
+                    
+                    # 轉換數據格式
+                    tweet_data['hashtags'] = json.dumps(tweet_data['hashtags'])
+                    tweet_data['mentions'] = json.dumps(tweet_data['mentions'])
+                    tweet_data['urls'] = json.dumps(tweet_data['urls'])
+                    tweet_data['media_urls'] = json.dumps(tweet_data['media_urls'])
                     
                     # Check if tweet already exists
                     if self.db.get_tweet_by_id(tweet_data['tweet_id']):
