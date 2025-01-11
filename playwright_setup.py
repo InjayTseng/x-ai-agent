@@ -16,7 +16,7 @@ class TwitterBrowser:
         self.page = None
         self._playwright = None
         
-    async def start(self):
+    async def start(self, headless: bool = True):
         """Start the browser and create a new context"""
         try:
             # Initialize playwright first
@@ -64,7 +64,7 @@ class TwitterBrowser:
             # Launch browser with combined arguments and increased timeouts
             self.browser = await self._playwright.chromium.launch(
                 args=browser_args,
-                headless=True if os.getenv('RAILWAY_ENVIRONMENT') == 'production' else False,
+                headless=True if os.getenv('RAILWAY_ENVIRONMENT') == 'production' else headless,
                 timeout=60000,
             )
             
@@ -115,12 +115,12 @@ class TwitterBrowser:
             asyncio.create_task(gc_task())
             
             logger.info("Browser started successfully")
-            return self.page
+            return True
             
         except Exception as e:
             logger.error(f"Error starting browser: {str(e)}")
             await self.close()
-            raise
+            return False
             
     async def close(self):
         """Close all browser resources"""
