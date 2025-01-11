@@ -10,13 +10,20 @@ logger = logging.getLogger(__name__)
 
 class TwitterBrowser:
     def __init__(self):
+        """Initialize TwitterBrowser"""
         self.browser = None
         self.context = None
         self.page = None
+        self._playwright = None
         
-    async def start(self, headless: bool = True) -> bool:
+    async def start(self):
         """Start the browser and create a new context"""
         try:
+            # Initialize playwright first
+            self._playwright = await async_playwright().start()
+            if not self._playwright:
+                raise Exception("Failed to initialize playwright")
+            
             # Get browser arguments from environment
             browser_args = os.getenv('BROWSER_ARGS', '').split()
             
@@ -42,29 +49,31 @@ class TwitterBrowser:
                 '--metrics-recording-only',
                 '--mute-audio',
                 # Memory management
-                '--js-flags="--max-old-space-size=256"',  # 限制 V8 引擎記憶體
-                '--memory-pressure-off',  # 關閉記憶體壓力檢測
-                '--single-process',  # 使用單進程模式
-                '--aggressive-cache-discard',  # 積極清理快取
-                '--disable-cache',  # 禁用瀏覽器快取
-                '--disable-application-cache',  # 禁用應用快取
-                '--disable-offline-load-stale-cache',  # 禁用離線快取
-                '--disk-cache-size=0',  # 設置磁碟快取大小為 0
+                '--js-flags="--max-old-space-size=256"',
+                '--memory-pressure-off',
+                '--single-process',
+                '--aggressive-cache-discard',
+                '--disable-cache',
+                '--disable-application-cache',
+                '--disable-offline-load-stale-cache',
+                '--disk-cache-size=0',
             ]
             
             browser_args.extend(default_args)
             
             # Launch browser with combined arguments and increased timeouts
-            playwright = await async_playwright().start()
-            self.browser = await playwright.chromium.launch(
+            self.browser = await self._playwright.chromium.launch(
                 args=browser_args,
-                headless=True if os.getenv('RAILWAY_ENVIRONMENT') == 'production' else headless,
-                timeout=60000,  # 增加啟動超時到 60 秒
+                headless=True if os.getenv('RAILWAY_ENVIRONMENT') == 'production' else False,
+                timeout=60000,
             )
+            
+            if not self.browser:
+                raise Exception("Failed to launch browser")
             
             # Create context with optimized memory settings
             self.context = await self.browser.new_context(
-                viewport={'width': 800, 'height': 600},  # 減小視窗大小
+                viewport={'width': 800, 'height': 600},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                 ignore_https_errors=True,
                 java_script_enabled=True,
@@ -74,8 +83,14 @@ class TwitterBrowser:
                 proxy=None,
             )
             
+            if not self.context:
+                raise Exception("Failed to create browser context")
+            
             # Create new page with increased timeouts
             self.page = await self.context.new_page()
+            if not self.page:
+                raise Exception("Failed to create new page")
+                
             await self.page.set_default_timeout(30000)
             await self.page.set_default_navigation_timeout(30000)
             
@@ -90,22 +105,36 @@ class TwitterBrowser:
             # Add periodic garbage collection
             async def gc_task():
                 while True:
-                    await asyncio.sleep(30)  # 每 30 秒
+                    await asyncio.sleep(30)
                     try:
-                        await self.page.evaluate('() => { gc(); }')  # 觸發 JavaScript GC
+                        if self.page and not self.page.is_closed():
+                            await self.page.evaluate('() => { gc(); }')
                     except Exception as e:
                         logger.warning(f"GC failed: {str(e)}")
             
             asyncio.create_task(gc_task())
             
             logger.info("Browser started successfully")
-            return True
+            return self.page
             
         except Exception as e:
             logger.error(f"Error starting browser: {str(e)}")
+            await self.close()
+            raise
+            
+    async def close(self):
+        """Close all browser resources"""
+        try:
+            if self.page and not self.page.is_closed():
+                await self.page.close()
+            if self.context:
+                await self.context.close()
             if self.browser:
                 await self.browser.close()
-            return False
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception as e:
+            logger.error(f"Error closing browser: {str(e)}")
             
     async def login(self, email: str, password: str, account_name: str) -> bool:
         """Login to Twitter"""
@@ -189,19 +218,6 @@ class TwitterBrowser:
         """Get the current page"""
         return self.page
         
-    async def close(self):
-        """Close the browser"""
-        try:
-            if self.page:
-                await self.page.close()
-            if self.context:
-                await self.context.close()
-            if self.browser:
-                await self.browser.close()
-            logger.info("Browser resources closed successfully")
-        except Exception as e:
-            logger.error(f"Error closing browser: {str(e)}")
-            
     async def _add_stealth_scripts(self):
         """Add scripts to help avoid detection"""
         await self.page.add_init_script("""
