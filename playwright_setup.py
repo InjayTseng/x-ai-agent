@@ -20,15 +20,30 @@ class TwitterBrowser:
             is_production = os.environ.get('RAILWAY_ENVIRONMENT') == 'production'
             headless = True if is_production else headless
             
+            # Get browser arguments from environment or use defaults
+            browser_args = os.environ.get('BROWSER_ARGS', '').split() or [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu'
+            ]
+            
             playwright = await async_playwright().start()
             self.browser = await playwright.chromium.launch(
                 headless=headless,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
+                args=browser_args
             )
             self.context = await self.browser.new_context(
                 viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ignore_https_errors=True,  # 添加此項以處理可能的 SSL 問題
+                bypass_csp=True  # 添加此項以繞過內容安全策略
             )
+            
+            # 設置更長的超時時間
+            self.context.set_default_timeout(30000)  # 30 秒
+            self.context.set_default_navigation_timeout(30000)
+            
             self.page = await self.context.new_page()
             
             # Add stealth scripts

@@ -25,9 +25,14 @@ RUN apt-get update && apt-get install -y \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    libxshmfence1 \
+    libglib2.0-0 \
+    libnss3-tools \
+    libxss1 \
+    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright dependencies
+# Install Playwright and browser
 RUN pip install playwright && \
     playwright install chromium && \
     playwright install-deps
@@ -41,6 +46,9 @@ COPY . .
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV RAILWAY_ENVIRONMENT=production
+
+# Set browser launch arguments
+ENV BROWSER_ARGS="--disable-dev-shm-usage --no-sandbox --disable-setuid-sandbox --disable-gpu"
 
 # Run the application
 CMD ["python", "main.py"]
