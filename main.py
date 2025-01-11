@@ -61,32 +61,47 @@ class TwitterAgent:
             # Get the browser page
             page = self.browser.page
             
-            # Main loop
+            # 主循環：持續運行機器人的核心功能
             while True:
                 try:
                     logger.info("Starting new scan cycle...")
                     
-                    # Always scan for new tweets
+                    # 1. 掃描和分析新推文
+                    # - 獲取最新的推文
+                    # - 分析推文內容和見解
+                    # - 將結果保存到數據庫
                     await self.analyzer.fetch_and_learn_tweets(page, self.max_tweets)
                     
-                    # Check if it's time to reply
+                    # 2. 檢查是否需要回覆推文
+                    # - 檢查距離上次回覆的時間間隔
+                    # - 如果超過設定的間隔(REPLY_INTERVAL)，則進行回覆
                     if (datetime.now() - self.last_reply_time).total_seconds() >= self.reply_interval:
+                        # 回覆最近的推文，限制最大回覆數量
                         await self.interactor.reply_to_recent_tweets(page, max_replies=self.max_replies)
+                        # 更新上次回覆時間
                         self.last_reply_time = datetime.now()
                     
-                    # Check if it's time to post summary
+                    # 3. 檢查是否需要發布摘要
+                    # - 檢查距離上次發布摘要的時間間隔
+                    # - 如果超過設定的間隔(SUMMARY_INTERVAL)，則生成並發布摘要
                     if (datetime.now() - self.last_summary_time).total_seconds() >= self.summary_interval:
+                        # 生成並發布見解摘要
                         await self.summarizer.post_summary(page)
+                        # 更新上次摘要時間
                         self.last_summary_time = datetime.now()
                     
-                    # Wait for next scan
+                    # 4. 等待下一個掃描週期
+                    # - 記錄完成當前週期
+                    # - 等待設定的時間間隔(SCAN_INTERVAL)後再次執行
                     logger.info(f"Cycle complete. Waiting {self.scan_interval/60:.1f} minutes until next scan...")
                     await asyncio.sleep(self.scan_interval)
                     
                 except Exception as e:
+                    # 錯誤處理：記錄錯誤並等待一段時間後重試
+                    # - 記錄錯誤信息到日誌
+                    # - 等待5分鐘後重試，避免立即重試可能導致的問題
                     logger.error(f"Error in main loop: {e}")
-                    await asyncio.sleep(300)  # Wait 5 minutes on error
-                    
+                    await asyncio.sleep(300)  # 5分鐘 = 300秒
         except Exception as e:
             logger.error(f"Critical error: {e}")
         

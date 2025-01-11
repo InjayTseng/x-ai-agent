@@ -423,3 +423,69 @@ class TwitterDatabase:
         except Exception as e:
             logger.error(f"Error getting recent interactions: {str(e)}")
             return []
+
+    def get_top_insights(self, limit: int = 5) -> List[Dict]:
+        """Get top insights from database, ordered by insight score and recency"""
+        try:
+            # First get all used tweet IDs
+            used_tweets_query = """
+            SELECT DISTINCT tweet_id FROM (
+                SELECT json_extract(value, '$') as tweet_id
+                FROM posts, json_each(source_tweets)
+                WHERE source_tweets IS NOT NULL
+                UNION
+                SELECT reference_tweet_id as tweet_id
+                FROM posts
+                WHERE reference_tweet_id IS NOT NULL
+            ) WHERE tweet_id IS NOT NULL
+            """
+            
+            # Then get fresh tweets
+            query = """
+            SELECT t.* 
+            FROM tweets t 
+            WHERE t.tweet_id NOT IN (
+                SELECT tweet_id FROM used_tweets
+            )
+            AND t.insight_score IS NOT NULL
+            AND t.insight_score > 0
+            ORDER BY t.insight_score DESC, t.timestamp DESC
+            LIMIT ?
+            """
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Create temporary table for used tweets
+                cursor.execute("DROP TABLE IF EXISTS used_tweets")
+                cursor.execute("CREATE TEMP TABLE used_tweets AS " + used_tweets_query)
+                
+                # Get fresh tweets
+                cursor.execute(query, (limit,))
+                
+                # Get column names
+                columns = [description[0] for description in cursor.description]
+                
+                # Convert rows to dictionaries
+                results = []
+                for row in cursor.fetchall():
+                    tweet_dict = dict(zip(columns, row))
+                    
+                    # Parse JSON fields
+                    for field in ['hashtags', 'mentions', 'urls', 'media_urls', 'topics', 'tokens']:
+                        if tweet_dict.get(field):
+                            try:
+                                tweet_dict[field] = json.loads(tweet_dict[field])
+                            except json.JSONDecodeError:
+                                tweet_dict[field] = []
+                    
+                    results.append(tweet_dict)
+                
+                # Clean up
+                cursor.execute("DROP TABLE IF EXISTS used_tweets")
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Error getting top insights: {str(e)}")
+            return []
