@@ -20,52 +20,56 @@ class TweetAnalyzer:
     async def extract_tweet_data(self, article) -> Dict:
         """Extract relevant data from a tweet article element"""
         try:
-            # Get tweet text
-            tweet_text = await article.query_selector('[data-testid="tweetText"]')
-            content = await tweet_text.inner_text() if tweet_text else ""
+            # Get tweet data using JavaScript evaluation
+            tweet_data = await article.evaluate("""(article) => {
+                const getText = (selector) => {
+                    const elem = article.querySelector(selector);
+                    return elem ? elem.innerText : '';
+                };
+                
+                const getAttr = (selector, attr) => {
+                    const elem = article.querySelector(selector);
+                    return elem ? elem.getAttribute(attr) : '';
+                };
+                
+                // Get tweet text
+                const tweet_text = getText('[data-testid="tweetText"]');
+                
+                // Get tweet URL and ID
+                const tweet_url = getAttr('a[href*="/status/"]', 'href');
+                const tweet_id = tweet_url ? tweet_url.split('/status/').pop() : null;
+                
+                // Get author
+                const author_text = getText('[data-testid="User-Name"]');
+                const author = author_text ? author_text.split('·')[0].trim() : '';
+                
+                // Get timestamp
+                const timestamp = getAttr('time', 'datetime');
+                
+                // Get media URLs
+                const media_urls = Array.from(
+                    article.querySelectorAll('img[src*="media"]')
+                ).map(img => img.src);
+                
+                // Extract hashtags, mentions, and URLs using regex
+                const hashtags = [...tweet_text.matchAll(/#(\w+)/g)].map(m => m[1]);
+                const mentions = [...tweet_text.matchAll(/@(\w+)/g)].map(m => m[1]);
+                const urls = [...tweet_text.matchAll(/https?:\/\/\S+/g)].map(m => m[0]);
+                
+                return {
+                    tweet_id: tweet_id,
+                    content: tweet_text,
+                    author: author,
+                    timestamp: timestamp,
+                    hashtags: JSON.stringify(hashtags),
+                    mentions: JSON.stringify(mentions),
+                    urls: JSON.stringify(urls),
+                    media_urls: JSON.stringify(media_urls)
+                };
+            }""")
             
-            # Get tweet ID from article
-            tweet_url_elem = await article.query_selector('a[href*="/status/"]')
-            tweet_url = await tweet_url_elem.get_attribute('href') if tweet_url_elem else None
-            tweet_id = tweet_url.split('/status/')[-1] if tweet_url else None
+            return tweet_data
             
-            # Get author
-            author_elem = await article.query_selector('[data-testid="User-Name"]')
-            author_text = await author_elem.inner_text() if author_elem else ""
-            author = author_text.split('·')[0].strip() if author_text else ""
-            
-            # Get timestamp
-            time_elem = await article.query_selector('time')
-            timestamp = await time_elem.get_attribute('datetime') if time_elem else None
-            
-            # Extract hashtags
-            hashtags = re.findall(r'#(\w+)', content)
-            
-            # Extract mentions
-            mentions = re.findall(r'@(\w+)', content)
-            
-            # Extract URLs
-            urls = re.findall(r'https?://\S+', content)
-            
-            # Get media URLs
-            media_elements = await article.query_selector_all('img[src*="media"]')
-            media_urls = []
-            for elem in media_elements:
-                if elem:
-                    src = await elem.get_attribute('src')
-                    if src:
-                        media_urls.append(src)
-            
-            return {
-                'tweet_id': tweet_id,
-                'content': content,
-                'author': author,
-                'timestamp': timestamp,
-                'hashtags': json.dumps(hashtags),
-                'mentions': json.dumps(mentions),
-                'urls': json.dumps(urls),
-                'media_urls': json.dumps(media_urls)
-            }
         except Exception as e:
             logger.error(f"Error extracting tweet data: {str(e)}")
             return None
@@ -224,28 +228,99 @@ If no tokens found, return an empty string."""},
     async def fetch_and_learn_tweets(self, page, max_tweets: int = 50) -> None:
         """Fetch tweets from home page, analyze them, and save to database"""
         try:
-            # Navigate to home page
+            # Navigate to home page with longer timeout and wait until network is idle
             logger.info("Navigating to Twitter home page...")
-            await page.goto("https://twitter.com/home")
-            await page.wait_for_timeout(3000)  # Wait for content to load
+            await page.goto(
+                "https://twitter.com/home",
+                wait_until="networkidle",
+                timeout=30000
+            )
+            await page.wait_for_timeout(5000)  # 增加等待時間
             
-            # Wait for tweet articles to appear
+            # 確保頁面已完全加載
+            try:
+                await page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception as e:
+                logger.warning(f"Wait for load state failed: {str(e)}")
+            
+            # Wait for tweet articles to appear with retry
             logger.info("Waiting for tweets to load...")
-            await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
+            max_retries = 3
+            articles = None
             
-            # Scroll a bit to load more tweets
-            for _ in range(3):
-                await page.evaluate('window.scrollBy(0, 1000)')
-                await page.wait_for_timeout(1000)
+            for attempt in range(max_retries):
+                try:
+                    # 等待任意推文出現
+                    await page.wait_for_selector(
+                        'article[data-testid="tweet"]',
+                        timeout=20000,
+                        state="visible"
+                    )
+                    
+                    # 緩慢滾動以加載更多推文
+                    for _ in range(3):
+                        await page.evaluate("""
+                            window.scrollBy({
+                                top: 500,
+                                behavior: 'smooth'
+                            });
+                        """)
+                        await page.wait_for_timeout(2000)
+                    
+                    # 使用 JavaScript 獲取推文
+                    articles = await page.evaluate("""
+                        Array.from(document.querySelectorAll('article[data-testid="tweet"]'))
+                    """)
+                    
+                    if articles:
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        await page.wait_for_timeout(5000)
+                        continue
+                    raise Exception("Failed to load tweets after multiple attempts")
             
-            # Get all tweet articles
-            articles = await page.query_selector_all('article[data-testid="tweet"]')
+            if not articles:
+                raise Exception("No tweets found")
+            
             processed_count = 0
             
             for article in articles[:max_tweets]:
                 try:
-                    # Extract tweet data
-                    tweet_data = await self.extract_tweet_data(article)
+                    # 使用 JavaScript 提取推文數據
+                    tweet_data = await article.evaluate("""(article) => {
+                        const getText = (selector) => {
+                            const elem = article.querySelector(selector);
+                            return elem ? elem.innerText : '';
+                        };
+                        
+                        const getAttr = (selector, attr) => {
+                            const elem = article.querySelector(selector);
+                            return elem ? elem.getAttribute(attr) : '';
+                        };
+                        
+                        const tweet_text = getText('[data-testid="tweetText"]');
+                        const tweet_url = getAttr('a[href*="/status/"]', 'href');
+                        const tweet_id = tweet_url ? tweet_url.split('/status/').pop() : null;
+                        const author = getText('[data-testid="User-Name"]').split('·')[0].trim();
+                        const timestamp = getAttr('time', 'datetime');
+                        
+                        return {
+                            tweet_id: tweet_id,
+                            content: tweet_text,
+                            author: author,
+                            timestamp: timestamp,
+                            hashtags: JSON.stringify([...tweet_text.matchAll(/#(\w+)/g)].map(m => m[1])),
+                            mentions: JSON.stringify([...tweet_text.matchAll(/@(\w+)/g)].map(m => m[1])),
+                            urls: JSON.stringify([...tweet_text.matchAll(/https?:\/\/\S+/g)].map(m => m[0])),
+                            media_urls: JSON.stringify(
+                                Array.from(article.querySelectorAll('img[src*="media"]'))
+                                    .map(img => img.src)
+                            )
+                        };
+                    }""", article)
+                    
                     if not tweet_data or not tweet_data['tweet_id']:
                         continue
                     
@@ -275,7 +350,7 @@ If no tokens found, return an empty string."""},
                     logger.info(f"Processed and saved tweet {tweet_data['tweet_id']} with topics: {topics}, tokens: {tokens}, and insight score: {insight_score}")
                     
                     # Add small delay between processing
-                    await page.wait_for_timeout(500)
+                    await page.wait_for_timeout(1000)
                     
                 except Exception as e:
                     logger.error(f"Error processing tweet: {str(e)}")
