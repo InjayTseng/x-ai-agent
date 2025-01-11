@@ -221,61 +221,34 @@ IMPORTANT: Never use quotation marks in the tweet."""
             logger.error(f"Error generating summary tweet: {str(e)}")
             return None
 
-    async def post_summary(self, page, hours: int = 24) -> bool:
-        """Post a summary of recent learnings"""
+    async def post_summary(self, page, summary: str) -> bool:
+        """Post a summary tweet"""
         try:
-            # Generate insight-based summary
-            summary_data = self.generate_insight_summary()
-            if not summary_data:
-                logger.error("Failed to generate any summary")
-                return False
-                
-            summary = summary_data['content']
-            logger.info(f"Generated summary: {summary}")
-            
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    # Go directly to compose tweet URL
-                    await page.goto('https://twitter.com/compose/tweet', 
-                                  wait_until='domcontentloaded',
-                                  timeout=10000)
-                    await page.wait_for_timeout(5000)
+                    # Navigate to compose tweet page
+                    await page.goto(
+                        "https://twitter.com/compose/tweet",
+                        wait_until="domcontentloaded",
+                        timeout=20000
+                    )
                     
-                    # Ensure compose page is loaded
-                    try:
-                        await page.wait_for_selector('div[data-testid="tweetTextarea_0"]', timeout=10000)
-                    except Exception:
-                        raise Exception("Compose tweet page did not load properly")
+                    # Wait for tweet input
+                    await page.wait_for_selector(
+                        '[data-testid="tweetTextarea_0"]',
+                        timeout=10000,
+                        state="visible"
+                    )
                     
-                    # Find and fill tweet input
-                    tweet_input = await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
-                    if not tweet_input:
-                        raise Exception("Could not find tweet input")
-                    
-                    await tweet_input.fill(summary)
-                    await page.wait_for_timeout(3000)
+                    # Type summary
+                    await page.fill('[data-testid="tweetTextarea_0"]', summary)
+                    await page.wait_for_timeout(1000)
                     
                     # Click tweet button
-                    tweet_button = await page.wait_for_selector('[data-testid="tweetButton"]', timeout=10000)
-                    if not tweet_button:
-                        raise Exception("Could not find tweet button")
+                    await page.click('[data-testid="tweetButton"]')
+                    await page.wait_for_timeout(3000)
                     
-                    await tweet_button.click()
-                    await page.wait_for_timeout(5000)
-                    
-                    # Save post to database with complete reference information
-                    post_data = {
-                        'content': summary,
-                        'type': 'insight',
-                        'reference_tweet_id': summary_data['main_reference'],
-                        'source_tweets': json.dumps([t['tweet_id'] for t in summary_data['reference_tweets']]),
-                        'timestamp': datetime.now().isoformat(),
-                        'status': 'posted'
-                    }
-                    self.db.save_post(post_data)
-                    
-                    logger.info("Successfully posted learning summary")
                     return True
                     
                 except Exception as e:
@@ -283,10 +256,8 @@ IMPORTANT: Never use quotation marks in the tweet."""
                     if attempt < max_retries - 1:
                         await page.wait_for_timeout(3000)
                         continue
-                    return False
+                    raise
                     
-            return False
-            
         except Exception as e:
-            logger.error(f"Error posting summary: {str(e)}")
+            logger.error(f"Error posting summary tweet: {str(e)}")
             return False

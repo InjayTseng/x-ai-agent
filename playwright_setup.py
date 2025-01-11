@@ -3,6 +3,7 @@ from playwright.async_api import async_playwright
 import os
 import time
 from typing import Optional
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,44 +15,96 @@ class TwitterBrowser:
         self.page = None
         
     async def start(self, headless: bool = True) -> bool:
-        """Start the browser"""
+        """Start the browser and create a new context"""
         try:
-            # Force headless mode in production environment
-            is_production = os.environ.get('RAILWAY_ENVIRONMENT') == 'production'
-            headless = True if is_production else headless
+            # Get browser arguments from environment
+            browser_args = os.getenv('BROWSER_ARGS', '').split()
             
-            # Get browser arguments from environment or use defaults
-            browser_args = os.environ.get('BROWSER_ARGS', '').split() or [
+            # Add additional arguments for stability and memory management
+            default_args = [
+                '--disable-dev-shm-usage',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu'
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--disable-notifications',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-breakpad',
+                '--disable-component-extensions-with-background-pages',
+                '--disable-extensions',
+                '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+                '--disable-ipc-flooding-protection',
+                '--disable-renderer-backgrounding',
+                '--enable-features=NetworkService,NetworkServiceInProcess',
+                '--force-color-profile=srgb',
+                '--hide-scrollbars',
+                '--metrics-recording-only',
+                '--mute-audio',
+                # Memory management
+                '--js-flags="--max-old-space-size=256"',  # 限制 V8 引擎記憶體
+                '--memory-pressure-off',  # 關閉記憶體壓力檢測
+                '--single-process',  # 使用單進程模式
+                '--aggressive-cache-discard',  # 積極清理快取
+                '--disable-cache',  # 禁用瀏覽器快取
+                '--disable-application-cache',  # 禁用應用快取
+                '--disable-offline-load-stale-cache',  # 禁用離線快取
+                '--disk-cache-size=0',  # 設置磁碟快取大小為 0
             ]
             
+            browser_args.extend(default_args)
+            
+            # Launch browser with combined arguments and increased timeouts
             playwright = await async_playwright().start()
             self.browser = await playwright.chromium.launch(
-                headless=headless,
-                args=browser_args
+                args=browser_args,
+                headless=True if os.getenv('RAILWAY_ENVIRONMENT') == 'production' else headless,
+                timeout=60000,  # 增加啟動超時到 60 秒
             )
+            
+            # Create context with optimized memory settings
             self.context = await self.browser.new_context(
-                viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                ignore_https_errors=True,  # 添加此項以處理可能的 SSL 問題
-                bypass_csp=True  # 添加此項以繞過內容安全策略
+                viewport={'width': 800, 'height': 600},  # 減小視窗大小
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                ignore_https_errors=True,
+                java_script_enabled=True,
+                bypass_csp=True,
+                extra_http_headers={'Accept-Language': 'en-US,en;q=0.9'},
+                storage_state=None,
+                proxy=None,
             )
             
-            # 設置更長的超時時間
-            self.context.set_default_timeout(30000)  # 30 秒
-            self.context.set_default_navigation_timeout(30000)
-            
+            # Create new page with increased timeouts
             self.page = await self.context.new_page()
+            await self.page.set_default_timeout(30000)
+            await self.page.set_default_navigation_timeout(30000)
             
-            # Add stealth scripts
-            await self._add_stealth_scripts()
+            # Add error handling
+            self.page.on('crash', lambda: logger.error('Page crashed'))
+            self.page.on('pageerror', lambda err: logger.error(f'Page error: {err}'))
+            
+            # Configure request interception to block unnecessary resources
+            await self.page.route('**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,ttf}', lambda route: route.abort())
+            await self.page.route('**/*', lambda route: route.continue_())
+            
+            # Add periodic garbage collection
+            async def gc_task():
+                while True:
+                    await asyncio.sleep(30)  # 每 30 秒
+                    try:
+                        await self.page.evaluate('() => { gc(); }')  # 觸發 JavaScript GC
+                    except Exception as e:
+                        logger.warning(f"GC failed: {str(e)}")
+            
+            asyncio.create_task(gc_task())
+            
             logger.info("Browser started successfully")
             return True
+            
         except Exception as e:
-            logger.error(f"Failed to start browser: {str(e)}")
+            logger.error(f"Error starting browser: {str(e)}")
+            if self.browser:
+                await self.browser.close()
             return False
             
     async def login(self, email: str, password: str, account_name: str) -> bool:

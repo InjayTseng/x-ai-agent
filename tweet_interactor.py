@@ -61,7 +61,7 @@ IMPORTANT: Never use quotation marks in the reply."""
             return None
             
     async def reply_to_tweet(self, page, tweet_data: Dict) -> bool:
-        """Post a reply to a specific tweet"""
+        """Reply to a specific tweet"""
         try:
             # Generate reply content
             reply_content = self.generate_reply(tweet_data)
@@ -70,182 +70,55 @@ IMPORTANT: Never use quotation marks in the reply."""
                 
             logger.info(f"Generated reply: {reply_content}")
                 
-            # Navigate to tweet
-            tweet_url = f"https://twitter.com/i/status/{tweet_data['tweet_id']}"
-            logger.info(f"Navigating to tweet: {tweet_url}")
-            
-            # Navigate with a more lenient wait strategy
-            try:
-                await page.goto(tweet_url, wait_until='load', timeout=30000)
-            except Exception as e:
-                logger.error(f"Initial navigation failed: {str(e)}")
-                # Try again with domcontentloaded
-                await page.goto(tweet_url, wait_until='domcontentloaded', timeout=30000)
-            
-            # Wait for main content to be visible
-            try:
-                await page.wait_for_selector('article', timeout=10000)
-            except Exception as e:
-                logger.error(f"Could not find article: {str(e)}")
-                return False
-            
-            await page.wait_for_timeout(5000)  # Additional wait for dynamic content
-            
-            # Take screenshot before interaction
-            await page.screenshot(path=f'debug_before_reply_{tweet_data["tweet_id"]}.png')
-            
-            # Try multiple selectors for the reply button
-            reply_button = None
-            reply_selectors = [
-                '[data-testid="reply"]',
-                'div[aria-label="Reply"]',
-                'div[role="button"][aria-label*="Reply"]',
-                'div[role="button"][aria-label="Reply"]',
-                'div[data-testid="reply"][role="button"]'
-            ]
-            
-            for selector in reply_selectors:
+            # Navigate to tweet with retry mechanism
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
-                    logger.info(f"Trying reply button selector: {selector}")
-                    reply_button = await page.wait_for_selector(selector, timeout=5000, state='visible')
+                    await page.goto(
+                        f"https://twitter.com/i/status/{tweet_data['tweet_id']}",
+                        wait_until="domcontentloaded",
+                        timeout=20000
+                    )
+                    
+                    # Wait for tweet to load
+                    await page.wait_for_selector(
+                        'article[data-testid="tweet"]',
+                        timeout=10000,
+                        state="visible"
+                    )
+                    
+                    # Wait for reply button
+                    reply_button = await page.wait_for_selector(
+                        '[data-testid="reply"]',
+                        timeout=10000,
+                        state="visible"
+                    )
+                    
                     if reply_button:
-                        logger.info(f"Found reply button with selector: {selector}")
+                        await reply_button.click()
                         break
+                        
                 except Exception as e:
-                    logger.info(f"Selector {selector} failed: {str(e)}")
-                    continue
+                    logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        await page.wait_for_timeout(3000)
+                        continue
+                    raise
             
-            if not reply_button:
-                logger.error("Could not find reply button")
-                await page.screenshot(path=f'error_no_reply_button_{tweet_data["tweet_id"]}.png')
-                return False
-                
-            # Try to click the reply button multiple ways
-            try:
-                await reply_button.click(timeout=5000)
-            except Exception as e:
-                logger.error(f"Standard click failed: {str(e)}")
-                try:
-                    # Try force click
-                    await reply_button.click(force=True, timeout=5000)
-                except Exception as e:
-                    logger.error(f"Force click failed: {str(e)}")
-                    try:
-                        # Try JavaScript click
-                        await reply_button.evaluate('node => node.click()')
-                    except Exception as e:
-                        logger.error(f"JavaScript click failed: {str(e)}")
-                        return False
-            
-            await page.wait_for_timeout(3000)
-            
-            # Take screenshot after clicking reply
-            await page.screenshot(path=f'debug_after_reply_click_{tweet_data["tweet_id"]}.png')
-            
-            # Find and fill reply input with retries
-            reply_input = None
-            input_selectors = [
+            # Wait for reply input
+            await page.wait_for_selector(
                 '[data-testid="tweetTextarea_0"]',
-                'div[role="textbox"][aria-label="Tweet text"]',
-                'div[data-testid="tweetTextarea_0"] div[role="textbox"]',
-                'div[contenteditable="true"]'
-            ]
+                timeout=10000,
+                state="visible"
+            )
             
-            for selector in input_selectors:
-                try:
-                    logger.info(f"Trying reply input selector: {selector}")
-                    reply_input = await page.wait_for_selector(selector, timeout=5000, state='visible')
-                    if reply_input:
-                        logger.info(f"Found reply input with selector: {selector}")
-                        break
-                except Exception as e:
-                    logger.info(f"Input selector {selector} failed: {str(e)}")
-                    continue
+            # Type reply
+            await page.fill('[data-testid="tweetTextarea_0"]', reply_content)
+            await page.wait_for_timeout(1000)
             
-            if not reply_input:
-                logger.error("Could not find reply input")
-                await page.screenshot(path=f'error_no_input_{tweet_data["tweet_id"]}.png')
-                return False
-            
-            # Try multiple methods to input text
-            try:
-                # Method 1: Direct fill
-                await reply_input.fill(reply_content)
-            except Exception as e:
-                logger.error(f"Direct fill failed: {str(e)}")
-                try:
-                    # Method 2: Click and type
-                    await reply_input.click()
-                    await page.keyboard.type(reply_content)
-                except Exception as e:
-                    logger.error(f"Click and type failed: {str(e)}")
-                    try:
-                        # Method 3: JavaScript
-                        await page.evaluate(f'''
-                            document.querySelector('[data-testid="tweetTextarea_0"]').innerText = "{reply_content}";
-                            document.querySelector('[data-testid="tweetTextarea_0"]').dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        ''')
-                    except Exception as e:
-                        logger.error(f"JavaScript input failed: {str(e)}")
-                        return False
-            
-            await page.wait_for_timeout(2000)
-            
-            # Take screenshot after typing reply
-            await page.screenshot(path=f'debug_after_typing_{tweet_data["tweet_id"]}.png')
-            
-            # Try multiple selectors for the tweet button
-            tweet_button = None
-            tweet_button_selectors = [
-                '[data-testid="tweetButton"]',
-                'div[data-testid="tweetButtonInline"]',
-                'div[role="button"][data-testid*="tweet"]',
-                'div[role="button"][data-testid="tweetButton"]',
-                'div[data-testid="tweetButton"][role="button"]'
-            ]
-            
-            for selector in tweet_button_selectors:
-                try:
-                    logger.info(f"Trying tweet button selector: {selector}")
-                    tweet_button = await page.wait_for_selector(selector, timeout=5000, state='visible')
-                    if tweet_button:
-                        logger.info(f"Found tweet button with selector: {selector}")
-                        break
-                except Exception as e:
-                    logger.info(f"Tweet button selector {selector} failed: {str(e)}")
-                    continue
-            
-            if not tweet_button:
-                logger.error("Could not find tweet button")
-                await page.screenshot(path=f'error_no_tweet_button_{tweet_data["tweet_id"]}.png')
-                return False
-            
-            # Check if tweet button is enabled
-            is_disabled = await tweet_button.get_attribute('aria-disabled') == 'true'
-            if is_disabled:
-                logger.error("Tweet button is disabled")
-                await page.screenshot(path=f'error_button_disabled_{tweet_data["tweet_id"]}.png')
-                return False
-            
-            # Try multiple methods to click the tweet button
-            try:
-                await tweet_button.click(timeout=5000)
-            except Exception as e:
-                logger.error(f"Standard click failed: {str(e)}")
-                try:
-                    await tweet_button.click(force=True, timeout=5000)
-                except Exception as e:
-                    logger.error(f"Force click failed: {str(e)}")
-                    try:
-                        await tweet_button.evaluate('node => node.click()')
-                    except Exception as e:
-                        logger.error(f"JavaScript click failed: {str(e)}")
-                        return False
-            
-            await page.wait_for_timeout(5000)  # Wait longer for tweet to post
-            
-            # Take final screenshot
-            await page.screenshot(path=f'debug_after_posting_{tweet_data["tweet_id"]}.png')
+            # Click reply button
+            await page.click('[data-testid="tweetButton"]')
+            await page.wait_for_timeout(3000)
             
             # Verify the reply was posted by checking for success indicators
             success_indicators = [
